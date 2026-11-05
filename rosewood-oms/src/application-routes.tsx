@@ -26,7 +26,7 @@ import {
   applicationModule, normalizeSearch, pageFromQuery, buildListQuery, skuProductQuery,
   orderListRow, productListRow, inventoryListRow, nativeEntityUrl, verifiedInventoryLinks,
   isResourceId, readHashState, listHashState, hashLocation, PAGE_SIZE, MAX_PAGE,
-  WORK_QUEUES,workQueue,
+  WORK_QUEUES,workQueue,wmsViewHashState,
   type ApplicationModule, type OrderListRow, type ProductListRow, type VerifiedInventoryLink,
 } from './list-queries';
 
@@ -80,7 +80,7 @@ function ResourceList({module, onSelect}: {module: ApplicationModule; onSelect: 
     } catch (cause) { setFormError(errorMessage(cause)); }
   }
   function changePage(nextPage: number) {
-    const next = listHashState(location);
+    const next = listHashState(location,module);
     if (nextPage) next.set('page', String(nextPage)); else next.delete('page');
     history.push(hashLocation(location.pathname, next));
   }
@@ -98,7 +98,7 @@ function ResourceList({module, onSelect}: {module: ApplicationModule; onSelect: 
     <form onSubmit={event => { event.preventDefault(); updateSearch(); }}>
       <Spacings.Stack scale="m">
         <SelectField name="work-queue" title="运营队列" value={filter} options={WORK_QUEUES[module]} onChange={event=>{
-          const next=listHashState(location);next.delete('page');
+          const next=listHashState(location,module);next.delete('page');
           const value=workQueue(module,String(event.target.value));
           if(value==='all')next.delete('filter');else next.set('filter',value);
           history.push(hashLocation(location.pathname,next));
@@ -107,7 +107,7 @@ function ResourceList({module, onSelect}: {module: ApplicationModule; onSelect: 
         <Spacings.Inline>
           <PrimaryButton type="submit" label="搜索" isDisabled={loading}/>
           <SecondaryButton label="清除搜索" isDisabled={loading || !search && !draft} onClick={() => {
-            const next=listHashState(location);next.delete('q');next.delete('page');
+            const next=listHashState(location,module);next.delete('q');next.delete('page');
             setDraft(''); setFormError(''); history.push(hashLocation(location.pathname, next));
             if (!search && page === 0) setReload(value => value + 1);
           }}/>
@@ -184,20 +184,19 @@ function ApplicationWorkspace({module, project, canManage}: {module: Application
   const wmsTabs=module==='wms'?<Spacings.Inline>{([
     ['inventory','库存查看与更正'],['transfer','库存调拨'],['count','销售库存盘点'],
   ] as const).map(([view,label])=><SecondaryButton key={view} label={label} isDisabled={wmsView===view} onClick={()=>{
-    const next=listHashState(location);
-    if(view==='inventory')next.delete('view');else next.set('view',view);
+    const next=wmsViewHashState(location,view);
     history.push(hashLocation(location.pathname,next));
   }}/>)}</Spacings.Inline>:null;
-  function back() { history.push(hashLocation(location.pathname, listHashState(location))); }
+  function back() { history.push(hashLocation(location.pathname, listHashState(location,module))); }
   function select(value: string) {
-    const next = listHashState(location);
+    const next = listHashState(location,module);
     next.set(module === 'wms' ? 'sku' : 'record', value);
     history.push(hashLocation(location.pathname, next));
   }
   if(module==='wms'&&wmsView!=='inventory')return <Spacings.Stack scale="l">{wmsTabs}<WmsWorkflows key={wmsView} canManage={canManage} mode={wmsView}/></Spacings.Stack>;
   if (!selected) return <Spacings.Stack scale="l">{wmsTabs}{module==='pim'&&<Spacings.Inline>
-    <SecondaryButton label="商品列表" isDisabled={query.get('view')!=='quality'} onClick={()=>{const next=listHashState(location);next.delete('view');history.push(hashLocation(location.pathname,next));}}/>
-    <SecondaryButton label="目录质量工作台" isDisabled={query.get('view')==='quality'} onClick={()=>{const next=listHashState(location);next.set('view','quality');next.delete('page');history.push(hashLocation(location.pathname,next));}}/>
+    <SecondaryButton label="商品列表" isDisabled={query.get('view')!=='quality'} onClick={()=>{const next=listHashState(location,module);next.delete('view');history.push(hashLocation(location.pathname,next));}}/>
+    <SecondaryButton label="目录质量工作台" isDisabled={query.get('view')==='quality'} onClick={()=>{const next=listHashState(location,module);next.set('view','quality');next.delete('page');history.push(hashLocation(location.pathname,next));}}/>
   </Spacings.Inline>}{module==='pim'&&query.get('view')==='quality'?<QualityWorkbench canManage={canManage} onSelect={select} snapshot={qualitySnapshot} onSnapshot={setQualitySnapshot}/>:<ResourceList module={module} onSelect={select}/>}</Spacings.Stack>;
   let valid = true;
   try { valid = module === 'wms' ? normalizeSearch(selected) === selected : isResourceId(selected); }

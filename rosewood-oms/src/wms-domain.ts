@@ -8,7 +8,7 @@ export type WmsHistory={at:string;action:string;quantity?:number;note:string};
 export type WmsValue={
   schemaVersion:1;type:WmsMode;status:string;sku:string;reason:string;reference:string;createdAt:string;
   source:StockSnapshot;destination?:StockSnapshot;planned:number;dispatched:number;received:number;
-  counted?:number;history:WmsHistory[];
+  counted?:number;history:WmsHistory[];closedAt?:string;closureReason?:string;
 };
 export type WmsDocument={id:string;version:number;container:string;key:string;value:WmsValue};
 export type QuantityAction={action:'addQuantity'|'removeQuantity'|'changeQuantity';quantity:number};
@@ -90,9 +90,31 @@ export function applyCount(value:WmsValue,entry:Inventory):WmsEffect{
   if(after===entry.quantityOnStock)throw new Error('盘点数量没有差异，无需调整库存。');
   return {inventory:entry,action:{action:'changeQuantity',quantity:after},after,next:{...value,status:'applied',history:stamp(value,'apply','已按快照版本应用 CT 销售库存盘点差异。',after-entry.quantityOnStock)},label:'确认盘点差异并过账'};
 }
+function assertNoInventoryEffects(value:WmsValue){
+  const workflow=value as WmsValue&{pending?:unknown;inventorySteps?:unknown};
+  if(workflow.pending!==undefined)throw new Error('单据有待核对库存步骤，不能取消或无差异结案。请先恢复原步骤。');
+  if(workflow.inventorySteps!==undefined&&(!Array.isArray(workflow.inventorySteps)||workflow.inventorySteps.length>0))throw new Error('单据已有库存步骤或记录格式不明，不能取消或无差异结案。');
+  if(stockNumber(value.dispatched)!==0||stockNumber(value.received)!==0)throw new Error('单据已发出或收货，不能取消或无差异结案。');
+}
+export function cancelWmsDocument(value:WmsValue,reason:string):WmsValue{
+  assertNoInventoryEffects(value);
+  if(!((value.type==='transfer'&&value.status==='planned')||(value.type==='count'&&['counted','reviewed'].includes(value.status))))throw new Error('只有未发出的调拨或未过账盘点可以取消。');
+  const closureReason=wmsText(reason,'取消原因',500,true);
+  return {...value,status:'cancelled',closedAt:new Date().toISOString(),closureReason,history:stamp(value,'cancel',`取消单据；未更改库存。原因：${closureReason}`)};
+}
+export function closeUnchangedCount(value:WmsValue,entry:Inventory):WmsValue{
+  assertNoInventoryEffects(value);
+  if(value.type!=='count'||value.status!=='reviewed')throw new Error('无差异结案前必须先复核盘点值。');
+  sameTarget(entry,value.source);
+  if(entry.version!==value.source.version||entry.quantityOnStock!==value.source.quantity)throw new Error('盘点快照后库存已变化，不能按旧快照结案。请取消旧单后重新盘点。');
+  if(stockNumber(value.counted!)!==entry.quantityOnStock)throw new Error('盘点存在差异，不能按无差异结案。');
+  const closureReason='读取时库存与原快照版本、数量及盘点值一致；仅结案，不修改库存。';
+  return {...value,status:'closed_no_change',closedAt:new Date().toISOString(),closureReason,history:stamp(value,'close_no_change',closureReason,0)};
+}
 export function validWmsValue(value:unknown,mode:WmsMode):value is WmsValue{
   if(!value||typeof value!=='object')return false;
   const v=value as WmsValue;
   return v.schemaVersion===1&&v.type===mode&&typeof v.status==='string'&&typeof v.sku==='string'&&!!v.source&&typeof v.source.id==='string'&&Array.isArray(v.history);
 }
-export const WMS_STATUS:Record<string,string>={planned:'待发出',in_transit:'在途 / 待收货',received:'已收齐',counted:'待复核',reviewed:'已复核 / 待过账',applied:'已过账'};
+export const WMS_STATUS:Record<string,string>={planned:'待发出',in_transit:'在途 / 待收货',received:'已收齐',counted:'待复核',reviewed:'已复核 / 待过账',applied:'已过账',closed_no_change:'无差异已结案',cancelled:'已取消'};
+export const WMS_MODE_STATUSES:Record<WmsMode,readonly string[]>={transfer:['planned','in_transit','received','cancelled'],count:['counted','reviewed','applied','closed_no_change','cancelled']};
