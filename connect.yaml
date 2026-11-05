@@ -1,0 +1,62 @@
+# Four existing Merchant Center registrations; no service or generated API client.
+deployAs:
+  - name: rosewood-oms
+    applicationType: merchant-center-custom-application
+    configuration:
+      standardConfiguration:
+        - key: CLOUD_IDENTIFIER
+          description: Existing Merchant Center cloud identifier
+          required: true
+          default: "gcp-au"
+        - key: CUSTOM_APPLICATION_ID
+          description: Existing Merchant Center registration value
+          required: true
+          default: "cmw2wnhny001001wtg2nm1uc3"
+        - key: ENTRY_POINT_URI_PATH
+          description: Existing Merchant Center registration value
+          required: true
+          default: "rosewood-oms"
+  - name: rosewood-wms
+    applicationType: merchant-center-custom-application
+    configuration:
+      standardConfiguration:
+        - key: CLOUD_IDENTIFIER
+          description: Existing Merchant Center cloud identifier
+          required: true
+          default: "gcp-au"
+        - key: CUSTOM_APPLICATION_ID
+          description: Existing Merchant Center registration value
+          required: true
+          default: "cmw2wop18001501wto26pburw"
+        - key: ENTRY_POINT_URI_PATH
+          description: Existing Merchant Center registration value
+          required: true
+          default: "rosewood-wms"
+  - name: rosewood-pim
+    applicationType: merchant-center-custom-application
+    configuration:
+      standardConfiguration:
+        - key: CLOUD_IDENTIFIER
+          description: Existing Merchant Center cloud identifier
+          required: true
+          default: "gcp-au"
+        - key: CUSTOM_APPLICATION_ID
+          description: Existing Merchant Center registration value
+          required: true
+          default: "cmw2wpl1o001a01wtrsox33lg"
+        - key: ENTRY_POINT_URI_PATH
+          description: Existing Merchant Center registration value
+          required: true
+          default: "rosewood-pim"
+  - name: rosewood-operations-view
+    applicationType: merchant-center-custom-view
+    configuration:
+      standardConfiguration:
+        - key: CLOUD_IDENTIFIER
+          description: Existing Merchant Center cloud identifier
+          required: true
+          default: "gcp-au"
+        - key: CUSTOM_VIEW_ID
+          description: Existing Merchant Center registration value
+          required: true
+          default: "cmw2rttr8000v01tb358hgf5l"
