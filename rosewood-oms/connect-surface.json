@@ -1,0 +1,9 @@
+{
+  "name": "rosewood-oms",
+  "module": "oms",
+  "expected": {
+    "CLOUD_IDENTIFIER": "gcp-au",
+    "CUSTOM_APPLICATION_ID": "cmw2wnhny001001wtg2nm1uc3",
+    "ENTRY_POINT_URI_PATH": "rosewood-oms"
+  }
+}
