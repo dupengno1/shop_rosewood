@@ -3,7 +3,14 @@ const {createWebpackConfigForProduction} = require('@commercetools-frontend/mc-s
 // Connect invokes mc-scripts directly. Extend its official production config
 // so font localization happens before every HTML compilation, including the
 // separate compile-html command that Connect runs when the container starts.
-const config = createWebpackConfigForProduction();
+// Bound CPU-derived worker pools for the Connect build container.
+const config = createWebpackConfigForProduction({toggleFlags: {parallelism: 1}});
+const CssMinimizerPlugin = require(require.resolve('css-minimizer-webpack-plugin', {
+  paths: [require.resolve('@commercetools-frontend/mc-scripts/webpack')],
+}));
+config.optimization.minimizer = config.optimization.minimizer.map((plugin) =>
+  plugin instanceof CssMinimizerPlugin ? new CssMinimizerPlugin({parallel: 1}) : plugin
+);
 config.plugins.push({
   apply(compiler) {
     compiler.hooks.thisCompilation.tap('RosewoodLocalFonts', (compilation) => {
