@@ -1,4 +1,5 @@
-import React,{useRef,useState,useEffect} from 'react';
+import React,{useRef,useState,useEffect,useCallback} from 'react';
+import {useHistory,useLocation} from 'react-router-dom';
 import {ContentNotification} from '@commercetools-uikit/notifications';
 import DataTable from '@commercetools-uikit/data-table';
 import Spacings from '@commercetools-uikit/spacings';
@@ -9,22 +10,41 @@ import SelectField from '@commercetools-uikit/select-field';
 import {useCommerceApi} from './api';
 import {errorMessage} from './domain';
 import {scanProductQuality,MAX_QUALITY_SCAN,type QualityScan} from './quality-scan';
-import type {ProductListRow} from './list-queries';
+import {qualityViewState,listHashState,hashLocation,type ProductListRow} from './list-queries';
 import QualityReports from './quality-reports';
 
 export default function QualityWorkbench({onSelect,snapshot,onSnapshot,canManage=false}:{onSelect:(id:string)=>void;snapshot:QualityScan;onSnapshot:(result:QualityScan)=>void;canManage?:boolean}){
-  const api=useCommerceApi(),generation=useRef(0);
-  const [result,setResult]=React.useState<QualityScan>(snapshot);
-  const [running,setRunning]=useState(false),[error,setError]=useState(''),[stopped,setStopped]=useState(false),[filter,setFilter]=useState('issues'),[page,setPage]=useState(0);
+  const api=useCommerceApi(),generation=useRef(0),location=useLocation(),history=useHistory();
+  const {report:reportKey,filter,page:requestedPage}=qualityViewState(location),activeReport=useRef(reportKey);
+  activeReport.current=reportKey;
+  const [storedResult,setResult]=React.useState<QualityScan>(snapshot),[loadedReport,setLoadedReport]=useState<string|null>(reportKey?null:'');
+  const result:QualityScan=loadedReport===reportKey?storedResult:{checked:0,rows:[],complete:false,limited:false};
+  const [running,setRunning]=useState(false),[error,setError]=useState(''),[stopped,setStopped]=useState(false);
   useEffect(()=>()=>{generation.current++;},[]);
+  function changeContext(changes:Record<string,string|undefined>){
+    const next=listHashState(location,'pim');next.set('view','quality');
+    for(const [key,value] of Object.entries(changes)){if(value)next.set(key,value);else next.delete(key);}
+    history.push(hashLocation(location.pathname,next));
+  }
+  const loaded=useCallback((scan:QualityScan,key:string)=>{
+    if(activeReport.current!==key)return;
+    generation.current++;setRunning(false);setStopped(false);setError('');setLoadedReport(key);setResult(scan);onSnapshot(scan);
+  },[onSnapshot]);
+  function selectReport(key:string){
+    activeReport.current=key;generation.current++;setRunning(false);setStopped(false);setError('');setLoadedReport(null);
+    const empty={checked:0,rows:[],complete:false,limited:false};setResult(empty);onSnapshot(empty);
+    changeContext({report:key,qualityPage:undefined});
+  }
   async function start(){
-    const run=++generation.current;setRunning(true);setError('');setStopped(false);setPage(0);
+    activeReport.current='';setLoadedReport('');changeContext({report:undefined,qualityPage:undefined});
+    const run=++generation.current;setRunning(true);setError('');setStopped(false);
     const empty={checked:0,rows:[],complete:false,limited:false};setResult(empty);onSnapshot(empty);
     try{await scanProductQuality(api,value=>{if(generation.current===run){setResult(value);onSnapshot(value);}},()=>generation.current!==run);}
     catch(e){if(generation.current===run)setError(errorMessage(e));}
     finally{if(generation.current===run)setRunning(false);}
   }
   const filtered=result.rows.filter(row=>filter==='all'||filter==='errors'&&row.errorCount>0||filter==='warnings'&&row.warningCount>0||filter==='issues'&&(row.errorCount>0||row.warningCount>0));
+  const page=Math.min(requestedPage,Math.max(0,Math.ceil(filtered.length/20)-1));
   const visible=filtered.slice(page*20,(page+1)*20);
   return <Spacings.Stack scale="l">
     <Text.Subheadline as="h4">目录质量工作台</Text.Subheadline>
@@ -37,9 +57,10 @@ export default function QualityWorkbench({onSelect,snapshot,onSnapshot,canManage
     {!running&&!stopped&&!error&&result.checked>0&&!result.complete&&!result.limited&&<ContentNotification type="warning">以下为此前已检查的部分结果；需要重新开始才能检查完整目录。</ContentNotification>}
     {result.complete&&<ContentNotification type="success">本次目录遍历完成。结果是检查时的观察，期间商品可能发生变化；发布前会重新读取。</ContentNotification>}
     {result.limited&&<ContentNotification type="warning">已达到 {MAX_QUALITY_SCAN} 件检查上限，以下结果不是完整目录。更大目录需后台批量任务。</ContentNotification>}
-    <SelectField name="quality-filter" title="问题范围" value={filter} options={[{value:'issues',label:'有问题的商品'},{value:'errors',label:'发布阻断'},{value:'warnings',label:'待核对提醒'},{value:'all',label:'全部已检查商品'}]} onChange={event=>{setFilter(String(event.target.value));setPage(0);}}/>
+    <SelectField name="quality-filter" title="问题范围" value={filter} options={[{value:'issues',label:'有问题的商品'},{value:'errors',label:'发布阻断'},{value:'warnings',label:'待核对提醒'},{value:'all',label:'全部已检查商品'}]} onChange={event=>changeContext({qualityFilter:String(event.target.value)==='issues'?undefined:String(event.target.value),qualityPage:undefined})}/>
     {visible.length?<DataTable<ProductListRow> isCondensed rows={visible} columns={[{key:'name',label:'商品'},{key:'sku',label:'SKU'},{key:'issues',label:'检查结果'},{key:'action',label:'操作'}]} itemRenderer={(row,column)=>column.key==='name'?row.name:column.key==='sku'?row.skus.slice(0,3).join(' · '):column.key==='issues'?`${row.errorCount} 项阻断 · ${row.warningCount} 项提醒`:<SecondaryButton label="查看问题与发布" onClick={()=>onSelect(row.id)}/>}/>:<Text.Body>{result.checked?'当前已检查范围内没有符合筛选的商品。':'开始检查后显示商品问题列表。'}</Text.Body>}
-    {filtered.length>0&&<Spacings.Inline><SecondaryButton label="上一页问题" isDisabled={page===0} onClick={()=>setPage(p=>p-1)}/><Text.Body>第 {page+1} 页 · {filtered.length} 件</Text.Body><SecondaryButton label="下一页问题" isDisabled={(page+1)*20>=filtered.length} onClick={()=>setPage(p=>p+1)}/></Spacings.Inline>}
-    <QualityReports snapshot={result} canSave={canManage&&!running} onLoad={scan=>{generation.current++;setRunning(false);setStopped(false);setError('');setPage(0);setResult(scan);onSnapshot(scan);}}/>
+    {filtered.length>0&&<Spacings.Inline><SecondaryButton label="上一页问题" isDisabled={page===0} onClick={()=>changeContext({qualityPage:page>1?String(page-1):undefined})}/><Text.Body>第 {page+1} 页 · {filtered.length} 件</Text.Body><SecondaryButton label="下一页问题" isDisabled={(page+1)*20>=filtered.length} onClick={()=>changeContext({qualityPage:String(page+1)})}/></Spacings.Inline>}
+    {reportKey&&<Text.Detail>当前查看已保存报告；开始新的目录检查后才能保存新报告。</Text.Detail>}
+    <QualityReports snapshot={result} canSave={canManage&&!running&&!reportKey} reportKey={reportKey} onLoad={loaded} onSelect={selectReport}/>
   </Spacings.Stack>;
 }

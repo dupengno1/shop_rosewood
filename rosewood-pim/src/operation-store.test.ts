@@ -48,3 +48,30 @@ test('CustomObject list uses stable server time/key cursor, twenty rows, and no 
   assert.ok(where.includes(`createdAt < "${stamp}"`)); assert.ok(where.includes(`key > "${documents.at(-1)!.key}"`));
   await assert.rejects(listOperations(api(() => ({results: [doc(), doc()]})), container), /重复/);
 });
+test('WMS predicates apply before pagination and keep cursor OR grouped under every filter', async () => {
+  const documents = Array.from({length: 20}, (_, index) => ({...doc(index + 1), value: {type: 'transfer', status: 'planned', sku: 'QA-SKU', reference: 'QA-REF'}}));
+  const filters = {type: 'transfer' as const, sku: 'QA-SKU', status: 'planned', reference: 'QA-REF'};
+  const calls: string[] = [];
+  const first = await listOperations(api(path => {calls.push(path); return {results: documents};}), container, undefined, filters);
+  await listOperations(api(path => {calls.push(path); return {results: []};}), container, first.nextCursor, filters);
+  const where = calls.map(path => new URL(path, 'https://example.invalid/').searchParams.get('where'));
+  const selection = 'value(type = "transfer") and value(sku = "QA-SKU") and value(status = "planned") and value(reference = "QA-REF")';
+  assert.equal(where[0], selection);
+  assert.equal(where[1], `${selection} and (createdAt < "${stamp}" or (createdAt = "${stamp}" and key > "${documents.at(-1)!.key}"))`);
+  await assert.rejects(listOperations(api(() => ({results: [{...doc(), value: {type: 'count'}}]})), container, undefined, filters), /不符合当前筛选/);
+});
+test('WMS query strings remain exact literals and invalid selectors never reach the API', async () => {
+  let calls = 0;
+  const client = api(path => {
+    calls++;
+    assert.equal(new URL(path, 'https://example.invalid/').searchParams.get('where'), 'value(sku = "QA\\\" or key=\\\"other")');
+    return {results: []};
+  });
+  await listOperations(client, container, undefined, {sku: 'QA" or key="other'});
+  assert.equal(calls, 1);
+  for (const filters of [{sku: 'bad\nvalue'}, {reference: 'x'.repeat(121)}, {status: 'injected'}, {type: 'other'}, {container: 'foreign'}]) {
+    await assert.rejects(listOperations(client, container, undefined, filters as never));
+  }
+  await assert.rejects(listOperations(client, 'rw-mc-pim-reports', undefined, {type: 'count'}), /不支持/);
+  assert.equal(calls, 1);
+});

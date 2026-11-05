@@ -44,21 +44,43 @@ export function readHashState(location: ApplicationLocationState): URLSearchPara
   const hash = location.hash || '';
   const source = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : '');
   const state = new URLSearchParams();
-  for (const key of ['q', 'page', 'record', 'sku', 'filter', 'view']) {
+  for (const key of ['q', 'page', 'record', 'sku', 'filter', 'view', 'report', 'qualityFilter', 'qualityPage', 'wmsDocument', 'wmsSku', 'wmsStatus', 'wmsReference']) {
     const value = source.get(key);
     if (value !== null) state.set(key, value);
   }
   return state;
 }
 
-export function listHashState(location: ApplicationLocationState): URLSearchParams {
+export function qualityViewState(location:ApplicationLocationState):{report:string;filter:string;page:number}{
+  const current=readHashState(location),filter=current.get('qualityFilter')||'issues';
+  return {report:current.get('report')||'',filter:['issues','errors','warnings','all'].includes(filter)?filter:'issues',page:pageFromQuery(current.get('qualityPage'))};
+}
+
+export function listHashState(location: ApplicationLocationState,module?:ApplicationModule): URLSearchParams {
   const current = readHashState(location), next = new URLSearchParams();
   if (current.get('q')) next.set('q', current.get('q')!);
   if (current.get('filter')) next.set('filter', current.get('filter')!);
   const view=current.get('view');
-  if(view&&['quality','transfer','count'].includes(view))next.set('view',view);
+  if(view&&((view==='quality'&&module!=='wms'&&module!=='oms')||(['transfer','count'].includes(view)&&module!=='pim'&&module!=='oms')))next.set('view',view);
+  if(module==='pim'||!module&&view==='quality'){
+    const quality=qualityViewState(location);
+    if(quality.report)next.set('report',quality.report);
+    if(quality.filter!=='issues')next.set('qualityFilter',quality.filter);
+    if(quality.page)next.set('qualityPage',String(quality.page));
+  }
+  if(module==='wms'||!module&&['transfer','count'].includes(view||'')){
+    for(const key of ['wmsDocument','wmsSku','wmsStatus','wmsReference'])if(current.get(key))next.set(key,current.get(key)!);
+  }
   const page = pageFromQuery(current.get('page'));
   if (page) next.set('page', String(page));
+  return next;
+}
+
+export function wmsViewHashState(location:ApplicationLocationState,view:'inventory'|'transfer'|'count'):URLSearchParams{
+  const next=listHashState(location,'wms');
+  if(view==='inventory')next.delete('view');else next.set('view',view);
+  // Document types and their status filters cannot carry across workflow tabs.
+  next.delete('wmsDocument');next.delete('wmsStatus');
   return next;
 }
 
