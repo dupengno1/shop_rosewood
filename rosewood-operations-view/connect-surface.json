@@ -1,0 +1,8 @@
+{
+  "name": "rosewood-operations-view",
+  "module": "view",
+  "expected": {
+    "CLOUD_IDENTIFIER": "gcp-au",
+    "CUSTOM_VIEW_ID": "cmw2rttr8000v01tb358hgf5l"
+  }
+}
