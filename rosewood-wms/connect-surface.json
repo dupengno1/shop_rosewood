@@ -1,0 +1,9 @@
+{
+  "name": "rosewood-wms",
+  "module": "wms",
+  "expected": {
+    "CLOUD_IDENTIFIER": "gcp-au",
+    "CUSTOM_APPLICATION_ID": "cmw2wop18001501wto26pburw",
+    "ENTRY_POINT_URI_PATH": "rosewood-wms"
+  }
+}
