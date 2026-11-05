@@ -7,6 +7,7 @@ export type OperationDocument<T extends object = Record<string, unknown>> = {
 };
 export type OperationCursor = {createdAt: string; key: string};
 export type OperationPage<T extends object> = {results: OperationDocument<T>[]; nextCursor?: OperationCursor};
+export type OperationListFilters = {type?: 'transfer' | 'count'; sku?: string; status?: string; reference?: string};
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function validateOperationKey(key: string): void {
   if (typeof key !== 'string' || !UUID.test(key)) throw new Error('业务单据 key 必须是有效 UUID。');
@@ -58,20 +59,40 @@ export function updateOperation<T extends object>(api: OperationApi, document: O
   if (!Number.isSafeInteger(document.version) || document.version < 1) throw new Error('更新需要已读取的业务单据版本。');
   return writeOperation(api, document.container, document.key, document.version, value);
 }
-export async function listOperations<T extends object>(api: OperationApi, container: string, cursor?: OperationCursor): Promise<OperationPage<T>> {
+function operationFilters(container: OperationContainer, filters?: OperationListFilters): Record<string, string> {
+  if (!filters) return {};
+  if (container !== 'rw-mc-wms-operations' || typeof filters !== 'object' || Array.isArray(filters)) throw new Error('此容器不支持仓储单据筛选。');
+  const limits: Record<string, number> = {type: 16, sku: 256, status: 32, reference: 120};
+  const result: Record<string, string> = {};
+  for (const [field, value] of Object.entries(filters)) {
+    if (!Object.hasOwn(limits, field)) throw new Error('不支持此业务单据筛选字段。');
+    if (value === undefined || value === '') continue;
+    if (typeof value !== 'string' || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value) || value.trim().length > limits[field]) throw new Error('单据筛选内容无效或过长。');
+    const text = value.trim();
+    if (text) result[field] = text;
+  }
+  if (result.type && !['transfer', 'count'].includes(result.type)) throw new Error('仓储单据类型无效。');
+  if (result.status && !['planned', 'in_transit', 'received', 'counted', 'reviewed', 'applied', 'closed_no_change', 'cancelled'].includes(result.status)) throw new Error('仓储单据状态无效。');
+  return result;
+}
+export async function listOperations<T extends object>(api: OperationApi, container: string, cursor?: OperationCursor, filters?: OperationListFilters): Promise<OperationPage<T>> {
   validateOperationContainer(container);
+  const selectedFilters = operationFilters(container, filters);
   const query = new URLSearchParams({limit: '20', withTotal: 'false'});
   query.append('sort', 'createdAt desc'); query.append('sort', 'key asc');
+  const predicates = Object.entries(selectedFilters).map(([field, value]) => `value(${field} = ${JSON.stringify(value)})`);
   if (cursor) {
     validateOperationKey(cursor.key);
     if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(cursor.createdAt) || !Number.isFinite(Date.parse(cursor.createdAt))) throw new Error('业务单据分页游标无效。');
-    query.set('where', `createdAt < ${JSON.stringify(cursor.createdAt)} or (createdAt = ${JSON.stringify(cursor.createdAt)} and key > ${JSON.stringify(cursor.key)})`);
+    predicates.push(`(createdAt < ${JSON.stringify(cursor.createdAt)} or (createdAt = ${JSON.stringify(cursor.createdAt)} and key > ${JSON.stringify(cursor.key)}))`);
   }
+  if (predicates.length) query.set('where', predicates.join(' and '));
   const page = await api<{results: OperationDocument<T>[]}>(`custom-objects/${container}?${query}`);
   if (!Array.isArray(page.results) || page.results.length > 20) throw new Error('业务单据列表响应无效。');
   const seen = new Set<string>();
   const results = page.results.map(document => {
     checkedDocument(document, container);
+    if (Object.entries(selectedFilters).some(([field, value]) => (document.value as Record<string, unknown>)[field] !== value)) throw new Error('业务单据返回内容不符合当前筛选，请重新读取。');
     if (seen.has(document.key) || (cursor && document.key === cursor.key) || !Number.isFinite(Date.parse(document.createdAt))) throw new Error('业务单据列表包含重复记录或无效时间。');
     seen.add(document.key); return document;
   });

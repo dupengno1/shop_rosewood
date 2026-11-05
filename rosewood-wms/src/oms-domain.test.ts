@@ -1,9 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyOmsOperations,validateOmsOperations,createAllocation,cancelAllocation,createReturnRequest,returnCapacity,
-  prepareReturnReceipt,reconcileReturnReceipt,releaseRejectedReceipt,createRefundRequest,refundBudget,type OmsOrder,type OmsInventory} from './oms-domain';
+  prepareReturnReceipt,reconcileReturnReceipt,releaseRejectedReceipt,createRefundRequest,refundBudget,cancelReturnRequest,cancelRefundRequest,type OmsOrder,type OmsInventory} from './oms-domain';
+import {parseOmsMajorAmount} from './oms-money';
 const id=(n:number)=>`12345678-1234-1234-1234-${String(n).padStart(12,'0')}`;
 const time='2026-11-05T11:00:00.000Z';
+test('legacy cancelled refunds remain readable without weakening audit fields for new cancellation',()=>{
+  const o=order(),data=createRefundRequest(o,emptyOmsOperations(o.id),{id:id(10),amount:1,currencyCode:'USD',reason:'Legacy request'},time);
+  const legacy={...data,refunds:data.refunds.map(item=>({...item,status:'cancelled' as const}))};
+  assert.equal(validateOmsOperations(legacy,o.id),legacy);
+  assert.equal(refundBudget(o,legacy).remaining,o.totalPrice!.centAmount);
+  assert.throws(()=>validateOmsOperations({...legacy,refunds:legacy.refunds.map(item=>({...item,cancelledAt:time}))},o.id));
+  assert.throws(()=>cancelRefundRequest(o,data,id(10),'',time));
+  const cancelled=cancelRefundRequest(o,data,id(10),'Customer withdrew',time);
+  assert.equal(cancelled.refunds[0].cancellationReason,'Customer withdrew');
+  assert.equal(cancelled.refunds[0].cancelledAt,time);
+});
 function order():OmsOrder{return {id:id(1),version:4,orderState:'Open',inventoryMode:'ReserveOnOrder',totalPrice:{centAmount:1000,currencyCode:'USD',fractionDigits:2},
   lineItems:[{id:id(2),name:{en:'Physical'},quantity:3,variant:{sku:'SKU-A'},supplyChannel:{id:id(3)},custom:{fields:{rwFulfillmentType:'physical'}}}],
   customLineItems:[{id:id(4),name:{en:'Tax'},key:'rw-tax',quantity:1,custom:{fields:{rwFulfillmentType:'physical'}}}],
@@ -85,4 +97,71 @@ test('aggregate validation rejects another order, unknown statuses and duplicate
   assert.throws(()=>validateOmsOperations({...data,refunds:[...data.refunds,...data.refunds]},o.id),/重复/);
   assert.throws(()=>validateOmsOperations({...data,refunds:[{...data.refunds[0],status:'refunded-success'}]},o.id),/无效/);
   assert.throws(()=>createRefundRequest(o,data,{id:id(11),amount:1,currencyCode:'USD',reason:'bad\nreason'},time),/控制字符/);
+});
+
+test('cancelling requested returns or exchanges preserves audit and releases only their pending capacity',()=>{
+  const o=order(),at='2026-11-05T11:05:00.000Z';
+  for(const kind of ['return','exchange'] as const){
+    const saved=createReturnRequest(o,emptyOmsOperations(o.id),{id:id(10),kind,lineItemId:id(2),quantity:2,reason:'Original reason',replacementSku:'SKU-B'},time);
+    assert.equal(returnCapacity(o,saved,id(2)),0);
+    const before=structuredClone(saved),nativeBefore=structuredClone(o);
+    const cancelled=cancelReturnRequest(o,saved,id(10),' Customer withdrew request ',at);
+    assert.equal(cancelled.returns.length,1);assert.equal(cancelled.returns[0].status,'cancelled');
+    assert.equal(cancelled.returns[0].reason,'Original reason');assert.equal(cancelled.returns[0].cancellationReason,'Customer withdrew request');assert.equal(cancelled.returns[0].cancelledAt,at);
+    assert.equal(cancelled.returns[0].createdAt,time);assert.equal(cancelled.returns[0].itemKey,saved.returns[0].itemKey);
+    assert.equal(returnCapacity(o,cancelled,id(2)),2);assert.deepEqual(saved,before);assert.deepEqual(o,nativeBefore);
+    assert.deepEqual(validateOmsOperations(JSON.parse(JSON.stringify(cancelled)),o.id),cancelled);
+    const replacement=createReturnRequest(o,cancelled,{id:id(11),kind:'return',lineItemId:id(2),quantity:2,reason:'New corrected request'},at);
+    assert.equal(returnCapacity(o,replacement,id(2)),0);
+    assert.throws(()=>cancelReturnRequest(o,cancelled,id(10),'Again',at),/只能取消/);
+    assert.throws(()=>prepareReturnReceipt(o,cancelled,id(10)),/待实收/);
+  }
+});
+
+test('return cancellation cannot retract native returns, receipt intents or completed receipts',()=>{
+  const o=order(),saved=createReturnRequest(o,emptyOmsOperations(o.id),{id:id(10),kind:'return',lineItemId:id(2),quantity:1,reason:'Original'},time);
+  const {intent,action}=prepareReturnReceipt(o,saved,id(10));
+  assert.throws(()=>cancelReturnRequest(o,intent,id(10),'Withdraw'),/只能取消/);
+  for(const shipmentState of ['Advised','Returned','BackInStock','Unusable']){
+    const native={...o,returnInfo:[{items:[{id:id(30),...action.items[0],shipmentState}]}]};
+    assert.throws(()=>cancelReturnRequest(native,saved,id(10),'Withdraw'),/原生订单/);
+  }
+  const received={...o,returnInfo:[{items:[{id:id(30),...action.items[0]}]}]};
+  const complete=reconcileReturnReceipt(received,intent,id(10));
+  assert.throws(()=>cancelReturnRequest(received,complete,id(10),'Withdraw'),/只能取消/);
+  const cancelled=cancelReturnRequest(o,saved,id(10),'Withdraw');
+  assert.throws(()=>returnCapacity(received,cancelled,id(2)),/已取消申请出现原生/);
+  assert.throws(()=>reconcileReturnReceipt(received,cancelled,id(10)),/已取消/);
+  for(const extra of [{returnItemId:id(30)},{attemptedOrderVersion:4}]){
+    const forged={...cancelled,returns:[{...cancelled.returns[0],...extra}]};
+    assert.throws(()=>validateOmsOperations(forged,o.id),/实收/);
+    assert.throws(()=>returnCapacity(o,forged,id(2)),/实收/);
+  }
+  const reopened=releaseRejectedReceipt(intent,id(10),409);
+  assert.equal(reopened.returns[0].attemptedOrderVersion,undefined);
+  assert.equal(cancelReturnRequest(o,reopened,id(10),'Definitively rejected before receipt').returns[0].status,'cancelled');
+});
+
+test('request cancellation requires a valid reason and time and cannot reopen cancelled audit records',()=>{
+  const o=order(),saved=createReturnRequest(o,emptyOmsOperations(o.id),{id:id(10),kind:'return',lineItemId:id(2),quantity:1,reason:'Original'},time);
+  for(const reason of ['','  ','bad\nreason','x'.repeat(501)])assert.throws(()=>cancelReturnRequest(o,saved,id(10),reason),/取消原因/);
+  for(const at of ['bad','2026-11-05T10:59:59.999Z'])assert.throws(()=>cancelReturnRequest(o,saved,id(10),'Withdraw',at),/取消时间/);
+  const cancelled=cancelReturnRequest(o,saved,id(10),'Withdraw');
+  for(const patch of [{cancellationReason:undefined},{cancelledAt:undefined},{status:'requested'}])assert.throws(()=>validateOmsOperations({...cancelled,returns:[{...cancelled.returns[0],...patch}]},o.id));
+  assert.throws(()=>cancelReturnRequest({...o,id:id(99)},saved,id(10),'Withdraw'),/不匹配/);
+});
+
+test('requested refunds can be cancelled without payment actions and restore exact application budget',()=>{
+  const o=order(),saved=createRefundRequest(o,emptyOmsOperations(o.id),{id:id(10),amount:parseOmsMajorAmount('0.01',2),currencyCode:'USD',reason:'Original refund request'},time),at='2026-11-05T11:05:00.000Z';
+  assert.equal(saved.refunds[0].amount,1);assert.equal(refundBudget(o,saved).remaining,999);
+  const before=structuredClone(saved),nativeBefore=structuredClone(o),cancelled=cancelRefundRequest(o,saved,id(10),'Customer withdrew',at);
+  assert.equal(cancelled.refunds.length,1);assert.equal(cancelled.refunds[0].status,'cancelled');assert.equal(cancelled.refunds[0].amount,1);
+  assert.equal(cancelled.refunds[0].reason,'Original refund request');assert.equal(cancelled.refunds[0].cancellationReason,'Customer withdrew');assert.equal(cancelled.refunds[0].cancelledAt,at);
+  assert.equal(refundBudget(o,cancelled).remaining,1000);assert.deepEqual(saved,before);assert.deepEqual(o,nativeBefore);
+  assert.deepEqual(validateOmsOperations(JSON.parse(JSON.stringify(cancelled)),o.id),cancelled);
+  assert.equal(createRefundRequest(o,cancelled,{id:id(11),amount:1000,currencyCode:'USD',reason:'Corrected request'},at).refunds.length,2);
+  for(const status of ['executing','completed','rejected'] as const){const changed={...saved,refunds:[{...saved.refunds[0],status}]};assert.throws(()=>cancelRefundRequest(o,changed,id(10),'Withdraw',at),/只能取消/);}
+  assert.throws(()=>cancelRefundRequest(o,cancelled,id(10),'Again',at),/只能取消/);
+  assert.throws(()=>cancelRefundRequest(o,saved,id(10),'',at),/取消原因/);
+  assert.throws(()=>validateOmsOperations({...cancelled,refunds:[{...cancelled.refunds[0],cancellationReason:undefined}]},o.id),/取消原因/);
 });

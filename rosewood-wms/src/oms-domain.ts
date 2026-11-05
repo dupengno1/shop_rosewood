@@ -5,9 +5,10 @@ type ReturnItem={id?:string;key?:string;lineItemId?:string;customLineItemId?:str
 export type OmsOrder=OrderResource&{id:string;inventoryMode?:string;totalPrice?:{centAmount:number;currencyCode:string;fractionDigits?:number};returnInfo?:Array<{items:ReturnItem[]}>};
 export type OmsInventory={id:string;version:number;sku:string;quantityOnStock:number;availableQuantity:number;supplyChannel?:{id:string;obj?:{key?:string;roles?:string[];name?:Record<string,string>}}};
 type RequestBase={id:string;createdAt:string;orderVersionObserved:number};
+type Cancellation={cancelledAt?:string;cancellationReason?:string};
 export type Allocation=RequestBase&{status:'planned'|'cancelled';lineItemId:string;sku:string;inventoryEntryId:string;supplyChannelId?:string;quantity:number;inventoryVersionObserved:number;inventoryMode:string;reason:string};
-export type ReturnRequest=RequestBase&{status:'requested'|'receiving'|'received';kind:'return'|'exchange';lineItemId:string;lineKind:'lineItem'|'customLineItem';quantity:number;reason:string;replacementSku?:string;itemKey:string;attemptedOrderVersion?:number;returnItemId?:string};
-export type RefundRequest=RequestBase&{status:'requested'|'executing'|'completed'|'rejected'|'cancelled';amount:number;currencyCode:string;reason:string};
+export type ReturnRequest=RequestBase&Cancellation&{status:'requested'|'receiving'|'received'|'cancelled';kind:'return'|'exchange';lineItemId:string;lineKind:'lineItem'|'customLineItem';quantity:number;reason:string;replacementSku?:string;itemKey:string;attemptedOrderVersion?:number;returnItemId?:string};
+export type RefundRequest=RequestBase&Cancellation&{status:'requested'|'executing'|'completed'|'rejected'|'cancelled';amount:number;currencyCode:string;reason:string};
 export type OmsOperations={schemaVersion:1;orderId:string;allocations:Allocation[];returns:ReturnRequest[];refunds:RefundRequest[]};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function check(value:unknown,message:string):asserts value{if(!value)throw new Error(message);}
@@ -15,6 +16,17 @@ function text(value:unknown,label:string,max=500):string{check(typeof value==='s
 function quantity(value:string|number,label='数量'):number{check(typeof value==='number'||/^\d+$/.test(value.trim()),`${label}须为正整数。`);const result=Number(value);check(Number.isSafeInteger(result)&&result>0,`${label}须为安全范围内的正整数。`);return result;}
 function sum(values:number[]):number{const result=values.reduce((a,b)=>a+b,0);check(Number.isSafeInteger(result)&&result>=0,'累计数量或金额无效，请先核对历史数据。');return result;}
 function base(order:OmsOrder,id:string,at:string):RequestBase{check(uuid.test(order.id)&&uuid.test(id),'订单或请求标识无效。');check(Number.isSafeInteger(order.version)&&Number(order.version)>0,'订单版本缺失，请刷新。');check(Number.isFinite(Date.parse(at)),'请求时间无效。');return {id,createdAt:at,orderVersionObserved:order.version!};}
+function cancellation(request:RequestBase,reason:string,at:string):Required<Cancellation>{
+  check(Number.isFinite(Date.parse(at))&&Date.parse(at)>=Date.parse(request.createdAt),'取消时间无效或早于申请时间。');
+  return {cancelledAt:at,cancellationReason:text(reason,'取消原因')};
+}
+function validateCancellation(request:RequestBase&Cancellation&{status:string},allowLegacyRefund=false):void{
+  // Refund cancellations predate the audit fields. Keep those existing records readable;
+  // all new transitions below still require both a reason and a valid timestamp.
+  if(allowLegacyRefund&&request.status==='cancelled'&&request.cancelledAt===undefined&&request.cancellationReason===undefined)return;
+  if(request.status==='cancelled')cancellation(request,request.cancellationReason!,request.cancelledAt!);
+  else check(request.cancelledAt===undefined&&request.cancellationReason===undefined,'非取消申请不能携带取消记录，请核对历史状态。');
+}
 export function emptyOmsOperations(orderId:string):OmsOperations{check(uuid.test(orderId),'订单标识无效。');return {schemaVersion:1,orderId,allocations:[],returns:[],refunds:[]};}
 export function validateOmsOperations(value:unknown,orderId:string):OmsOperations{
   check(value&&typeof value==='object','运营记录格式无效。');const data=value as OmsOperations;
@@ -23,8 +35,8 @@ export function validateOmsOperations(value:unknown,orderId:string):OmsOperation
   const ids=new Set<string>();
   for(const request of [...data.allocations,...data.returns,...data.refunds]){check(request&&uuid.test(request.id)&&!ids.has(request.id),'运营请求标识无效或重复。');ids.add(request.id);check(Number.isSafeInteger(request.orderVersionObserved)&&request.orderVersionObserved>0&&Number.isFinite(Date.parse(request.createdAt)),'运营请求版本或时间无效。');}
   for(const allocation of data.allocations){check(['planned','cancelled'].includes(allocation.status)&&uuid.test(allocation.lineItemId)&&uuid.test(allocation.inventoryEntryId),'分仓记录无效。');quantity(allocation.quantity);}
-  for(const request of data.returns){check(['requested','receiving','received'].includes(request.status)&&['return','exchange'].includes(request.kind)&&uuid.test(request.lineItemId)&&['lineItem','customLineItem'].includes(request.lineKind)&&request.itemKey===`rw-return-${request.id}`,'退换记录无效。');quantity(request.quantity);}
-  for(const request of data.refunds){check(['requested','executing','completed','rejected','cancelled'].includes(request.status)&&/^[A-Z]{3}$/.test(request.currencyCode),'退款申请记录无效。');quantity(request.amount,'退款金额');}
+  for(const request of data.returns){check(['requested','receiving','received','cancelled'].includes(request.status)&&['return','exchange'].includes(request.kind)&&uuid.test(request.lineItemId)&&['lineItem','customLineItem'].includes(request.lineKind)&&request.itemKey===`rw-return-${request.id}`,'退换记录无效。');quantity(request.quantity);validateCancellation(request);if(request.status==='cancelled')check(request.returnItemId===undefined&&request.attemptedOrderVersion===undefined,'已有实收记录或实收意图的申请不能标记取消。');}
+  for(const request of data.refunds){check(['requested','executing','completed','rejected','cancelled'].includes(request.status)&&/^[A-Z]{3}$/.test(request.currencyCode),'退款申请记录无效。');quantity(request.amount,'退款金额');validateCancellation(request,true);}
   return data;
 }
 function ensureNew(data:OmsOperations,order:OmsOrder,id:string){validateOmsOperations(data,order.id);check(![...data.allocations,...data.returns,...data.refunds].some(item=>item.id===id),'请求已存在，请刷新核对，勿重复保存。');check(data.allocations.length+data.returns.length+data.refunds.length<200,'此订单已达到工作台记录上限，请由后台归档处理。');}
@@ -48,9 +60,11 @@ export function createAllocation(order:OmsOrder,data:OmsOperations,inventory:Oms
 export function cancelAllocation(data:OmsOperations,id:string):OmsOperations{const found=data.allocations.find(item=>item.id===id);check(found&&found.status==='planned','该计划已变化，请刷新。');return {...data,allocations:data.allocations.map(item=>item.id===id?{...item,status:'cancelled'}:item)};}
 function nativeReturns(order:OmsOrder):ReturnItem[]{const items=(order.returnInfo||[]).flatMap(info=>info.items||[]);for(const item of items){quantity(item.quantity);check(Boolean(item.lineItemId)!==Boolean(item.customLineItemId),'历史退货行标识无效。');}return items;}
 export function returnCapacity(order:OmsOrder,data:OmsOperations,lineId:string,excludeRequestId?:string):number{
+  validateOmsOperations(data,order.id);
   const line=physical(order,lineId),items=nativeReturns(order),keys=new Set(items.map(item=>item.key).filter(Boolean));
+  check(!data.returns.some(item=>item.status==='cancelled'&&keys.has(item.itemKey)),'已取消申请出现原生退货记录，请先核对，不能释放可退数量。');
   const returned=sum(items.filter(item=>(item.lineItemId||item.customLineItemId)===lineId).map(item=>item.quantity));
-  const pending=sum(data.returns.filter(item=>item.lineItemId===lineId&&item.id!==excludeRequestId&&!keys.has(item.itemKey)).map(item=>item.quantity));
+  const pending=sum(data.returns.filter(item=>item.lineItemId===lineId&&item.id!==excludeRequestId&&item.status!=='cancelled'&&!keys.has(item.itemKey)).map(item=>item.quantity));
   check(returned+pending<=line.deliveredQuantity,'已有退货/待执行申请超过已登记发运量，请先核对。');
   return line.deliveredQuantity-returned-pending;
 }
@@ -66,6 +80,14 @@ export function findRecordedReturn(order:OmsOrder,request:ReturnRequest):ReturnI
   if(found.length){const item=found[0];check((request.lineKind==='lineItem'?item.lineItemId:item.customLineItemId)===request.lineItemId&&item.quantity===request.quantity,'原生退货键已存在，但行或数量与本申请不同。');check(['Returned','BackInStock','Unusable'].includes(item.shipmentState||''),'原生退货键对应的记录尚不能证明已经实收。');check(Boolean(item.id),'原生退货记录缺少标识。');return item;}
   return undefined;
 }
+export function cancelReturnRequest(order:OmsOrder,data:OmsOperations,requestId:string,reason:string,at=new Date().toISOString()):OmsOperations{
+  validateOmsOperations(data,order.id);const request=data.returns.find(item=>item.id===requestId);
+  check(request&&request.status==='requested','只能取消待执行的退换申请；实收中、已实收或已取消记录不能撤销。');
+  check(request.returnItemId===undefined&&request.attemptedOrderVersion===undefined,'此申请存在实收记录或实收意图，请先核对结果，不能取消。');
+  check(!nativeReturns(order).some(item=>item.key===request.itemKey),'原生订单已存在此申请的退货键，不能取消或更改原生退货状态。');
+  const audit=cancellation(request,reason,at);base(order,request.id,at);
+  return {...data,returns:data.returns.map(item=>item.id===requestId?{...item,status:'cancelled',...audit}:item)};
+}
 export function prepareReturnReceipt(order:OmsOrder,data:OmsOperations,requestId:string):{intent:OmsOperations;action:{action:'addReturnInfo';items:Array<{key:string;quantity:number;lineItemId?:string;customLineItemId?:string;comment:string;shipmentState:'Returned'}>}}{
   validateOmsOperations(data,order.id);const request=data.returns.find(item=>item.id===requestId);check(request&&request.status==='requested','退货申请不是待实收状态；请先核对已有结果。');
   check(!findRecordedReturn(order,request),'此申请已存在原生退货记录，请核对，勿重复登记。');
@@ -77,13 +99,14 @@ export function prepareReturnReceipt(order:OmsOrder,data:OmsOperations,requestId
 }
 export function reconcileReturnReceipt(order:OmsOrder,data:OmsOperations,requestId:string):OmsOperations{
   validateOmsOperations(data,order.id);const request=data.returns.find(item=>item.id===requestId);check(request,'退货申请不存在。');const record=findRecordedReturn(order,request);
+  check(request.status!=='cancelled','已取消申请不能登记或核对为实收，请先人工核对原生记录。');
   check(record,'尚未在原生订单中确认实收记录。保留待核对意图，不自动重发；请检查原生订单或联系管理员。');
   return {...data,returns:data.returns.map(item=>item.id===requestId?{...item,status:'received',returnItemId:record.id}:item)};
 }
 export function releaseRejectedReceipt(data:OmsOperations,requestId:string,status:number):OmsOperations{
   check(Number.isInteger(status)&&status>=400&&status<500&&status!==408&&status!==429,'结果不确定时不能重新开放实收提交。');
   const request=data.returns.find(item=>item.id===requestId);check(request?.status==='receiving','没有待核对的实收意图。');
-  return {...data,returns:data.returns.map(item=>item.id===requestId?{...item,status:'requested'}:item)};
+  return {...data,returns:data.returns.map(item=>{if(item.id!==requestId)return item;const {attemptedOrderVersion,...reopened}=item;return {...reopened,status:'requested'};})};
 }
 export function refundBudget(order:OmsOrder,data:OmsOperations):{currencyCode:string;total:number;requested:number;remaining:number;fractionDigits:number}{
   const price=order.totalPrice;check(price&&Number.isSafeInteger(price.centAmount)&&price.centAmount>=0&&/^[A-Z]{3}$/.test(price.currencyCode),'原生订单总额或币种不可用，不能计算申请上限。');
@@ -96,4 +119,10 @@ export function createRefundRequest(order:OmsOrder,data:OmsOperations,input:{id:
   ensureNew(data,order,input.id);const budget=refundBudget(order,data),amount=quantity(input.amount,'最小货币单位金额');check(input.currencyCode===budget.currencyCode,'申请币种必须与原生订单一致。');check(amount<=budget.remaining,'金额超过扣除待执行/已完成申请后的本工作台申请上限。');
   check(!nativeReturns(order).some(item=>item.paymentState==='Refunded'),'原生订单已有已退款退货行，尚未接入支付对账，不能自动判定剩余可申请金额。');
   const request:RefundRequest={...base(order,input.id,at),status:'requested',amount,currencyCode:budget.currencyCode,reason:text(input.reason,'退款原因')};return {...data,refunds:[...data.refunds,request]};
+}
+export function cancelRefundRequest(order:OmsOrder,data:OmsOperations,requestId:string,reason:string,at=new Date().toISOString()):OmsOperations{
+  validateOmsOperations(data,order.id);const request=data.refunds.find(item=>item.id===requestId);
+  check(request&&request.status==='requested','只能取消待执行的退款申请；执行中、已完成或已关闭记录不能撤销。');
+  const audit=cancellation(request,reason,at);base(order,request.id,at);
+  return {...data,refunds:data.refunds.map(item=>item.id===requestId?{...item,status:'cancelled',...audit}:item)};
 }

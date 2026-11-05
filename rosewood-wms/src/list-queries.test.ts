@@ -4,7 +4,7 @@ import {
   applicationModule, buildListQuery, skuProductQuery, normalizeSearch, pageFromQuery,
   PAGE_SIZE, QUERY_LIMIT, MAX_PAGE, orderListRow, inventoryListRow,
   nativeEntityUrl, verifiedInventoryLinks, productListRow,
-  readHashState, listHashState, hashLocation,
+  readHashState, listHashState, hashLocation, qualityViewState, wmsViewHashState,
 } from './list-queries';
 import type {Product} from './api';
 
@@ -150,4 +150,26 @@ test('WMS transfer and count views survive fixed-path refresh and preserve inven
   }
   assert.equal(listHashState({hash:'#view=quality&record=bad'}).get('view'),'quality');
   assert.equal(listHashState({hash:'#view=arbitrary&record=bad'}).has('view'),false);
+});
+
+
+test('saved PIM report, quality filter and page survive product detail return and fixed-path reload',()=>{
+  const state=new URLSearchParams({view:'quality',report:id,qualityFilter:'warnings',qualityPage:'4',record:id,wmsDocument:id,wmsSku:'FOREIGN'});
+  const list=listHashState({hash:`#${state}`},'pim');
+  assert.deepEqual(qualityViewState({hash:`#${list}`}),{report:id,filter:'warnings',page:4});
+  assert.equal(list.has('record'),false);assert.equal(list.has('wmsDocument'),false);assert.equal(list.has('wmsSku'),false);
+  const reopened=hashLocation(`/${project}/rosewood-pim`,list);
+  assert.equal(reopened.search,'');assert.equal(qualityViewState(reopened).page,4);
+  assert.deepEqual(qualityViewState({hash:'#qualityFilter=bad&qualityPage=99999'}),{report:'',filter:'issues',page:0});
+});
+
+test('WMS view switches clear document and type-specific status, preserve SKU/reference and drop PIM state',()=>{
+  const state={hash:`#view=transfer&wmsDocument=${id}&wmsSku=SKU-1&wmsStatus=in_transit&wmsReference=QA-1&report=${id}&qualityFilter=warnings&qualityPage=2`};
+  const same=listHashState(state,'wms');
+  assert.equal(same.get('wmsDocument'),id);assert.equal(same.get('wmsStatus'),'in_transit');assert.equal(same.has('report'),false);assert.equal(same.has('qualityFilter'),false);
+  for(const view of ['count','inventory'] as const){
+    const next=wmsViewHashState(state,view);assert.equal(next.has('wmsDocument'),false);assert.equal(next.has('wmsStatus'),false);
+    assert.equal(next.get('wmsSku'),'SKU-1');assert.equal(next.get('wmsReference'),'QA-1');assert.equal(next.get('view'),view==='inventory'?null:view);
+  }
+  const oms=listHashState(state,'oms');assert.equal(oms.has('view'),false);assert.equal(oms.has('wmsDocument'),false);assert.equal(oms.has('report'),false);
 });
