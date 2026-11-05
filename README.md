@@ -6,6 +6,6 @@ Each folder is independent: run `npm ci`, `npm test`, and `npm run typecheck`. T
 
 Publish this repository to GitHub with a Git tag, create/preview/install the Connector, then use the returned four deployment URLs to update the existing Merchant Center registrations. No Connect URL is known or claimed by this source package. Keep existing registrations and project installation IDs. Verify actual Menu / Custom View loading and authorized QA writes after the URL switch.
 
-The build invokes official mc-scripts, retains the registered IDs/scopes/locators, preserves the self-hosted font fix in the official HTML template, and runs official compile-html afterward. Connect must serve each customization using its supported routing. This package does not introduce Sites-specific deep path aliases.
+Connect runs mc-scripts build directly and compile-html at startup. Each application includes the officially supported root webpack.config.prod.cjs extension, which emits local font assets and updates the official HTML template while preserving every official script byte. This also works independently of the optional npm build wrapper. Registered IDs, scopes and locators are retained. Connect must serve each customization using its supported routing. This package does not introduce Sites-specific deep path aliases.
 
 Official documentation: https://docs.commercetools.com/merchant-center-customizations/deployment/commercetools-connect
