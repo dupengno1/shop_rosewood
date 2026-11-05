@@ -1,0 +1,9 @@
+{
+  "name": "rosewood-pim",
+  "module": "pim",
+  "expected": {
+    "CLOUD_IDENTIFIER": "gcp-au",
+    "CUSTOM_APPLICATION_ID": "cmw2wpl1o001a01wtrsox33lg",
+    "ENTRY_POINT_URI_PATH": "rosewood-pim"
+  }
+}
