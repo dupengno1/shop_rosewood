@@ -1,7 +1,7 @@
 {
   "generator": "rosewood-mc-connect-source-v1",
   "project": "rosewood-shop-demorosewood-shop-demo",
-  "generatedAt": "2026-11-09T01:11:16.760Z",
+  "generatedAt": "2026-11-09T02:30:31.061Z",
   "surfaces": [
     {
       "module": "oms",
@@ -35,6 +35,6 @@
       "CUSTOM_VIEW_ID": "cmw2rttr8000v01tb358hgf5l"
     }
   ],
-  "sourceFileCountPerSurface": 53,
+  "sourceFileCountPerSurface": 54,
   "specificationSha256": "dc8d47c54e3ea179bd4941a46eb470f904f9989e0b7e721985a43a7009dc1cd9"
 }
