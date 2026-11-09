@@ -85,8 +85,21 @@ export default function ProductOperationsWorkbench({project}:{project:string}){
    <SelectField name="status" title="Inventory Status" value={status} options={['all','In Stock','Low Stock','Out of Stock','Unknown','Digital'].map(value=>({value,label:value==='all'?'All statuses':value}))} onChange={e=>setStatus(String(e.target.value))}/>
    <SelectField name="published" title="Published Status" value={published} options={[{value:'all',label:'All products'},{value:'published',label:'Published'},{value:'draft',label:'Unpublished'}]} onChange={e=>setPublished(String(e.target.value))}/>
   </Spacings.Inline><SecondaryButton label="Refresh products and stock" isDisabled={loading} onClick={()=>setAttempt(n=>n+1)}/><Notice error={error}/>{warning&&<ContentNotification type="warning">{warning}</ContentNotification>}
-  {loading?<React.Fragment><LoadingSpinner/><Text.Detail>Reading live products: {progress}</Text.Detail></React.Fragment>:<React.Fragment><Text.Body>{matches.length} matching products</Text.Body><DataTable<WorkbenchRow> isCondensed rows={matches.slice(page*20,(page+1)*20)} columns={[{key:'name',label:'Product Name'},{key:'image',label:'Product Image'},{key:'key',label:'Product Key'},{key:'catalogs',label:'Catalog Assignment'},{key:'primaryWarehouse',label:'Primary Warehouse'},{key:'available',label:'Available Inventory'},{key:'status',label:'Inventory Status'},{key:'published',label:'Published Status'},{key:'open',label:'Action'}]} itemRenderer={(row,col)=>{
-   if(col.key==='image')return row.image?<img src={row.image} alt={row.name} style={{width:64,height:64,objectFit:'contain'}}/>:'No image';if(col.key==='catalogs')return row.catalogs?.join(' / ')|| (row.catalogs?'Not assigned':'Not available');if(col.key==='available')return row.digital?'Not applicable':row.summary.available??'Unknown';if(col.key==='status')return row.digital?(row.published?'Active digital product':'Unpublished digital product'):row.summary.status;if(col.key==='published')return row.published?'Published':'Unpublished';if(col.key==='open')return <SecondaryButton label="View operations" onClick={()=>setSelected(products.find(p=>p.id===row.id))}/>;return String(row[col.key as 'name'|'key'|'primaryWarehouse']);
-  }}/><Spacings.Inline><SecondaryButton label="Previous" isDisabled={page===0} onClick={()=>setPage(p=>p-1)}/><Text.Body>Page {page+1}</Text.Body><SecondaryButton label="Next" isDisabled={(page+1)*20>=matches.length} onClick={()=>setPage(p=>p+1)}/></Spacings.Inline></React.Fragment>}
+  {loading?<React.Fragment><LoadingSpinner/><Text.Detail>Reading live products: {progress}</Text.Detail></React.Fragment>:<React.Fragment><Text.Body>{matches.length} matching products</Text.Body>
+  <div role="region" aria-label="Product operations table" tabIndex={0} style={{width:'100%',minWidth:0,maxWidth:'100%',overflowX:'auto'}}>
+   <DataTable<WorkbenchRow> isCondensed maxWidth="100%" wrapHeaderLabels={false} rows={matches.slice(page*20,(page+1)*20)} columns={[
+    {key:'name',label:'Product Name',width:'minmax(220px, 2fr)'},
+    {key:'image',label:'Product Image',width:'144px'},
+    {key:'key',label:'Product Key',width:'160px'},
+    {key:'catalogs',label:'Catalog Assignment',width:'180px'},
+    {key:'primaryWarehouse',label:'Primary Warehouse',width:'190px'},
+    {key:'available',label:'Available Inventory',width:'180px'},
+    {key:'status',label:'Inventory Status',width:'164px'},
+    {key:'published',label:'Published Status',width:'160px'},
+    {key:'open',label:'Action',width:'190px'},
+   ]} itemRenderer={(row,col)=>{
+    if(col.key==='image')return row.image?<img src={row.image} alt={row.name} style={{width:64,height:64,minWidth:64,flexShrink:0,objectFit:'contain'}}/>:'No image';if(col.key==='catalogs')return row.catalogs?.join(' / ')|| (row.catalogs?'Not assigned':'Not available');if(col.key==='available')return row.digital?'Not applicable':row.summary.available??'Unknown';if(col.key==='status')return row.digital?(row.published?'Active digital product':'Unpublished digital product'):row.summary.status;if(col.key==='published')return row.published?'Published':'Unpublished';if(col.key==='open')return <SecondaryButton label="View operations" onClick={()=>setSelected(products.find(p=>p.id===row.id))}/>;return String(row[col.key as 'name'|'key'|'primaryWarehouse']);
+   }}/>
+  </div><Spacings.Inline><SecondaryButton label="Previous" isDisabled={page===0} onClick={()=>setPage(p=>p-1)}/><Text.Body>Page {page+1}</Text.Body><SecondaryButton label="Next" isDisabled={(page+1)*20>=matches.length} onClick={()=>setPage(p=>p+1)}/></Spacings.Inline></React.Fragment>}
  </Section>;
 }
