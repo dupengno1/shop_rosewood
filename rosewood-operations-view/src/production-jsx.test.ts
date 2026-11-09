@@ -55,6 +55,9 @@ test('OMS order information renders real classic production JSX without implying
  const components=load('oms-presentation.tsx');
  const html=render(components.OrderInformation,{order});
  assert.match(html,/Order Information/);assert.match(html,/Pending/);assert.match(html,/Not recorded/);
+ const simulated=render(components.OrderInformation,{order:{...order,custom:{fields:{rwPaymentMethod:'payme',rwPaymentStatus:'simulated-approved'}}}});
+ assert.match(simulated,/PayMe \(simulated selection\)/);assert.match(simulated,/Pending/);
+ assert.match(simulated,/not evidence of a payment capture/);assert.doesNotMatch(simulated,/>Paid</);
 });
 test('production rendering regression rejects the original missing React fragment import',()=>{
  for(const [file,exportName,props] of [
@@ -66,7 +69,7 @@ test('production rendering regression rejects the original missing React fragmen
   assert.throws(()=>render(component,props),/React is not defined/,file);
  }
 });
-test('production Product Operations loads stock and catalogs, opens details and returns to the list',async()=>{
+test('production Product Operations loads 544 products in two bounded pages, opens details and returns to the list',async()=>{
  // jsdom is already a locked dependency of official application-config.
  const configRequire=createRequire(requireFromSource.resolve('@commercetools-frontend/application-config'));
  const {JSDOM}=configRequire('jsdom');
@@ -77,10 +80,17 @@ test('production Product Operations loads stock and catalogs, opens details and 
   previous.set(name,Object.getOwnPropertyDescriptor(globals,name));Object.defineProperty(globals,name,{value,writable:true,configurable:true});
  }
  const reads:string[]=[];
+ const catalog=[product,...Array.from({length:543},(_,index)=>({...product,id:`QA-PRODUCT-${String(index).padStart(4,'0')}`,key:`QA-${index}`}))];
  const inventory={id:'QA-INVENTORY',version:1,sku:'QA-SKU',quantityOnStock:10,availableQuantity:8,supplyChannel:{id:'QA-CHANNEL',obj:{key:'rw-warehouse-asia'}}};
  const api=async(path:string,options?:unknown)=>{
   assert.equal(options,undefined,'The operational product panel must only read.');reads.push(path);
-  if(path.startsWith('products?'))return {results:[product]};
+  if(path.startsWith('products?')){
+   const query=new URLSearchParams(path.slice('products?'.length)),limit=Number(query.get('limit'));
+   assert.ok(limit>0&&limit<=500,'Product requests must stay within the platform page limit.');
+   assert.equal(query.get('sort'),'id asc');
+   const after=query.get('where');const cursor=after?JSON.parse(after.slice('id > '.length)):'';
+   return {results:catalog.filter(row=>row.id>cursor).slice(0,limit)};
+  }
   if(path.startsWith('inventory?'))return {results:[inventory]};
   if(path.startsWith('product-selections/key=rosewood-us-catalog/products'))return {results:[{product:{id:product.id}}]};
   if(path.startsWith('product-selections/key=rosewood-hk-catalog/products'))return {results:[]};
@@ -93,13 +103,15 @@ test('production Product Operations loads stock and catalogs, opens details and 
   const component=load('product-operations.tsx',undefined,api).default;
   await React.act(async()=>{root.render(React.createElement(IntlProvider,{locale:'en',messages:{}},React.createElement(component,{project:'qa-project'})));});
   const text=()=>dom.window.document.body.textContent||'';
-  assert.match(text(),/1 matching products/);assert.match(text(),/QA product/);assert.match(text(),/Global Catalog/);
+  assert.match(text(),/544 matching products/);assert.match(text(),/QA product/);assert.match(text(),/Global Catalog/);
+  assert.equal(reads.filter(path=>path.startsWith('products?')).length,2,'544 products should require two complete bounded pages, not six network round trips.');
   const click=async(label:string)=>{const button=Array.from(dom.window.document.querySelectorAll('button')).find((item:any)=>item.textContent?.includes(label)) as HTMLButtonElement|undefined;assert.ok(button,`Missing button: ${label}`);await React.act(async()=>{button.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));});};
   await click('View operations');
   assert.match(text(),/Store & Fulfilment Information/);assert.match(text(),/Asia Warehouse/);assert.match(text(),/Total Available Inventory: 8/);assert.match(text(),/QA-SKU/);
   await click('Refresh operational information');assert.match(text(),/Total Available Inventory: 8/);
-  await click('Back to product operations');assert.match(text(),/1 matching products/);
+  await click('Back to product operations');assert.match(text(),/544 matching products/);
   await click('Refresh products and stock');assert.match(text(),/QA product/);
+  assert.equal(reads.filter(path=>path.startsWith('products?')).length,4,'Refresh must independently reload both complete product pages.');
   assert.ok(reads.length>=10,'Both workbench and detail refresh must read their data.');
  }finally{
   await React.act(async()=>{root.unmount();});dom.window.close();
