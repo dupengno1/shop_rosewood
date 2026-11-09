@@ -1,6 +1,6 @@
 # Rosewood Merchant Center Connect source package
 
-This generated package hosts the three existing OMS / WMS / PIM Custom Applications and the existing Operations Custom View. It creates no service, credentials, database, PSP or WMS connector. Current user permissions and commercetools data remain authoritative.
+This generated package retains the existing OMS / WMS / PIM Custom Application artifacts and the Operations Custom View. Only OMS and WMS remain installed in the demo project; PIM was uninstalled by user request and must not be reinstalled during publication. Its artifact and registration are retained for compatibility. It creates no service, credentials, database, PSP or WMS connector. Current user permissions and commercetools data remain authoritative.
 
 Each folder is independent: run `npm ci`, `npm test`, and `npm run typecheck`. To build, provide its non-secret values from `connect-surface.json` and `APPLICATION_URL`; Connect injects APPLICATION_URL during deployment. Then run `npm run build`. Node 22 is required. Do not commit node_modules, public, env files or QA data.
 
