@@ -62,10 +62,10 @@ export default function ProductOperationsWorkbench({project}:{project:string}){
  useEffect(()=>{let active=true;setLoading(true);setError('');setWarning('');setRows([]);setProducts([]);setProgress(0);
   (async()=>{try{
    const all:Product[]=[];let last='';const seen=new Set<string>();
-   for(;;){const params=new URLSearchParams({limit:'100',sort:'id asc',withTotal:'false',...(last?{where:`id > ${JSON.stringify(last)}`}:{})});const result=await api<{results:Product[]}>(`products?${params}`);if(!active)return;
+   for(;;){const params=new URLSearchParams({limit:'500',sort:'id asc',withTotal:'false',...(last?{where:`id > ${JSON.stringify(last)}`}:{})});const result=await api<{results:Product[]}>(`products?${params}`);if(!active)return;
     if(!Array.isArray(result.results)||result.results.some(row=>seen.has(row.id)))throw Error('Product scan did not advance. Refresh before using these results.');
     result.results.forEach(row=>seen.add(row.id));all.push(...result.results);setProgress(all.length);
-    if(result.results.length<100)break;if(all.length>=3000)throw Error('The catalog exceeds the 3,000-product workbench limit. Use native Products to narrow the selection.');last=all.at(-1)!.id;
+    if(result.results.length<500)break;if(all.length>=3000)throw Error('The catalog reaches the 3,000-product workbench limit. Use native Products to narrow the selection.');last=all.at(-1)!.id;
    }
    const inventory:Inventory[]=[];last='';const inventorySeen=new Set<string>();
    let inventoryComplete=true;try{for(;;){const q=new URLSearchParams({limit:'500',sort:'id asc',withTotal:'false',expand:'supplyChannel',...(last?{where:`id > ${JSON.stringify(last)}`}:{})});const result=await api<{results:Inventory[]}>(`inventory?${q}`);if(!active)return;if(!Array.isArray(result.results)||result.results.some(row=>inventorySeen.has(row.id)))throw Error('Inventory scan did not advance.');result.results.forEach(row=>inventorySeen.add(row.id));inventory.push(...result.results);if(result.results.length<500)break;if(inventory.length>=10000)throw Error('Inventory scan limit reached.');last=inventory.at(-1)!.id;}}catch{inventoryComplete=false;if(active)setWarning('Inventory could not be read completely. Availability is shown as Unknown.');}
