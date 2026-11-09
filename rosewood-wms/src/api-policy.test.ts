@@ -17,3 +17,7 @@ test('API access rejects URL traversal and channel writes',()=>{
   assert.doesNotThrow(()=>validateCommerceRequest('channels?where=roles%20contains%20all%20(%22InventorySupply%22)'));
   assert.throws(()=>validateCommerceRequest('channels',{key:'new'}));
 });
+test('catalog membership lookup is read-only and does not grant product selection mutations',()=>{
+ assert.doesNotThrow(()=>validateCommerceRequest('product-selections/key=rosewood-us-catalog/products?limit=100'));
+ assert.throws(()=>validateCommerceRequest('product-selections/key=rosewood-us-catalog',{version:1,actions:[]}));
+});

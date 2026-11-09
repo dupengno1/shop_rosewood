@@ -30,7 +30,7 @@ test('exact order and SKU search values cannot introduce predicate clauses or UR
   assert.match(productWhere, /masterData\(staged\(masterVariant/);
   assert.match(productWhere, /masterData\(current\(masterVariant/);
   assert.match(productWhere, /or variants\(sku=/);
-  assert.throws(() => normalizeSearch('x\ny'), /单行/);
+  assert.throws(() => normalizeSearch('x\ny'), /single line/);
   assert.throws(() => normalizeSearch('a'.repeat(257)), /256/);
 });
 
@@ -45,8 +45,8 @@ test('pagination uses fixed server limits and offset boundaries without conflati
   assert.match(query(buildListQuery('pim', id, 0)).get('where')!, new RegExp(` or id="${id}" or `));
   assert.equal(query(buildListQuery('pim', 'key-only', 0)).get('where')!.includes(' or id='), false);
   assert.equal(query(buildListQuery('wms', '', MAX_PAGE)).get('offset'), '10000');
-  assert.throws(() => buildListQuery('wms', '', MAX_PAGE + 1), /页码/);
-  assert.throws(() => buildListQuery('oms', '', -1), /页码/);
+  assert.throws(() => buildListQuery('wms', '', MAX_PAGE + 1), /page/);
+  assert.throws(() => buildListQuery('oms', '', -1), /page/);
   assert.equal(pageFromQuery('-1'), 0);
   assert.equal(pageFromQuery('1.5'), 0);
   assert.equal(pageFromQuery(String(MAX_PAGE + 1)), 0);
@@ -78,14 +78,14 @@ test('native inventory links require an exact SKU match in returned product data
   const links = verifiedInventoryLinks([value], 'NOTE', project, origin);
   assert.equal(links.length, 1);
   assert.equal(links[0].url, `${origin}/${project}/products/${id}/variants/1/inventory`);
-  assert.match(links[0].label, /库存列表/);
+  assert.match(links[0].label, /native inventory/);
   assert.equal(nativeEntityUrl(project, 'orders', id, origin), `${origin}/${project}/orders/${id}`);
-  assert.throws(() => nativeEntityUrl(project, 'products', 'guessed-product', origin), /标识/);
-  assert.throws(() => nativeEntityUrl(project, 'products', id, origin, 0), /变体/);
+  assert.throws(() => nativeEntityUrl(project, 'products', 'guessed-product', origin), /identifier/);
+  assert.throws(() => nativeEntityUrl(project, 'products', id, origin, 0), /variant/);
   const lookup = query(skuProductQuery('NOTE'));
   assert.equal(lookup.get('limit'), '2');
   assert.equal(lookup.get('where')!.startsWith('masterData(staged('), true);
-  assert.throws(() => skuProductQuery('  '), /不能为空/);
+  assert.throws(() => skuProductQuery('  '), /Enter a SKU/);
   const listRow = productListRow(value);
   assert.equal(listRow.variantCount, 2);
   assert.equal(listRow.version,3);
