@@ -20,7 +20,9 @@ export default {
   "oAuthScopes": {
     "view": [
       "view_products",
-      "view_orders"
+      "view_orders",
+      "view_product_selections",
+      "view_payments"
     ],
     "manage": [
       "manage_products",
@@ -34,6 +36,7 @@ export default {
   "locators": [
     "products.product_details.general",
     "products.product_details.variants",
+    "products.product_details.selections",
     "products.product_variant_details.inventory",
     "products.product_variant_details.inventory.details",
     "orders.order_details.general",
