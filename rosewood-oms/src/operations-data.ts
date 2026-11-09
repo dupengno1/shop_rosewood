@@ -51,8 +51,12 @@ export const paymentMethod=(value?:string):string=>({card:'Credit Card',credit_c
 export function orderPaymentMethods(order:Order):string[]{
   const methods=(order.paymentInfo?.payments||[]).map(ref=>ref.obj?.paymentMethodInfo?.method||ref.obj?.paymentMethodInfo?.name?.en).filter((value):value is string=>Boolean(value));
   const custom=order.custom?.fields?.rwPaymentMethod;
-  if(typeof custom==='string')methods.push(custom);
-  return [...new Set(methods.map(paymentMethod))];
+  const labels=methods.map(paymentMethod);
+  if(typeof custom==='string'&&custom.trim())labels.push(paymentMethod(custom)+(isSimulatedPaymentSelection(order)?' (simulated selection)':''));
+  return [...new Set(labels)];
+}
+export function isSimulatedPaymentSelection(order:Order):boolean{
+  return order.custom?.fields?.rwPaymentStatus==='simulated-approved';
 }
 export function orderDeliveryMethods(order:Order):string[]{
   const methods=[order.shippingInfo?.shippingMethodName,...(order.shipping||[]).map(row=>row.shippingInfo?.shippingMethodName)].filter((value):value is string=>Boolean(value));

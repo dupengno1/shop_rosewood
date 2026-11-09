@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {Order,Inventory,Product} from './api';
-import {inventorySummary,warehouseName,orderConsignments,sourceStore,productOperationalData,orderPaymentMethods,orderDeliveryMethods} from './operations-data';
+import {inventorySummary,warehouseName,orderConsignments,sourceStore,productOperationalData,orderPaymentMethods,orderDeliveryMethods,isSimulatedPaymentSelection} from './operations-data';
 const entry=(stock:number,available:number,key='rw-warehouse-asia'):Inventory=>({id:key,version:1,sku:'SKU',quantityOnStock:stock,availableQuantity:available,supplyChannel:{id:key,obj:{key}}});
 test('warehouse inventory distinguishes absent and incomplete observations from zero and negative availability',()=>{
  assert.equal(inventorySummary([]).status,'Unknown');assert.equal(inventorySummary([entry(10,5)],false).available,null);
@@ -25,4 +25,12 @@ test('order presentation uses saved shop and channels and never assumes order-sp
  const groups=orderConsignments(order);assert.equal(groups.length,2);assert.equal(groups[0].warehouse,'Americas Warehouse');assert.equal(groups[0].nativeReserved,null);assert.equal(groups[1].warehouse,'Digital Delivery');
  assert.deepEqual(orderPaymentMethods(order),['WeChat Pay']);assert.deepEqual(orderDeliveryMethods(order),['Hotel Collection']);
  assert.equal(orderConsignments({...order,lineItems:[{...order.lineItems[0],quantity:NaN}]}).length,0);
+});
+test('native checkout simulation metadata labels the selected method without replacing native payment state or inventing a method',()=>{
+ const order:Order={id:'order',version:1,lineItems:[],customLineItems:[],paymentState:'Pending',custom:{fields:{rwPaymentMethod:'unionpay',rwPaymentStatus:'simulated-approved'}}};
+ assert.deepEqual(orderPaymentMethods(order),['UnionPay (simulated selection)']);
+ assert.equal(isSimulatedPaymentSelection(order),true);assert.equal(order.paymentState,'Pending');
+ assert.deepEqual(orderPaymentMethods({...order,custom:{fields:{rwPaymentStatus:'simulated-approved'}}}),[]);
+ assert.deepEqual(orderPaymentMethods({...order,custom:{fields:{rwPaymentMethod:'wechat'}}}),['WeChat Pay']);
+ assert.deepEqual(orderPaymentMethods({...order,paymentState:'Paid',paymentInfo:{payments:[{id:'native-payment',obj:{paymentMethodInfo:{method:'card'}}}]}}),['Credit Card','UnionPay (simulated selection)']);
 });
