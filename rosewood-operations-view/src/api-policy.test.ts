@@ -21,3 +21,10 @@ test('catalog membership lookup is read-only and does not grant product selectio
  assert.doesNotThrow(()=>validateCommerceRequest('product-selections/key=rosewood-us-catalog/products?limit=100'));
  assert.throws(()=>validateCommerceRequest('product-selections/key=rosewood-us-catalog',{version:1,actions:[]}));
 });
+test('only an exact source Cart UUID and reservation expansion are allowed read-only',()=>{
+ const path=`carts/${key}?expand=lineItems[*].reservation.inventoryEntry.supplyChannel`;
+ assert.doesNotThrow(()=>validateCommerceRequest(path));
+ assert.doesNotThrow(()=>validateCommerceRequest(`carts/${key}?expand=${encodeURIComponent('lineItems[*].reservation.inventoryEntry.supplyChannel')}`));
+ for(const candidate of [`carts/${key}`,`carts/${key}?expand=customer`,`carts/${key}?expand=lineItems[*].reservation.inventoryEntry.supplyChannel&limit=20`,`carts/${key}/`,`carts/key=other?expand=lineItems[*].reservation.inventoryEntry.supplyChannel`,'carts?limit=500',path+'&expand=customer'])assert.throws(()=>validateCommerceRequest(candidate));
+ assert.throws(()=>validateCommerceRequest(path,{version:1,actions:[]}));
+});

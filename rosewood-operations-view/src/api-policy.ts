@@ -12,6 +12,12 @@ export function validateCommerceRequest(path:string,payload?:unknown):void {
   if(/^(products|orders|inventory)(\/|$)/.test(pathname))return;
   if(/^channels(\/|$)/.test(pathname)&&payload===undefined)return;
   if(/^product-selections(\/|$)/.test(pathname)&&payload===undefined)return;
+  if(payload===undefined&&pathname.startsWith('carts/')){
+    const parts=pathname.split('/'),query=new URLSearchParams(path.slice(pathname.length+1));
+    // Only the source Cart of an opened order is read by the caller. No Cart
+    // listing, arbitrary expansion, mutation or customer lookup is exposed.
+    if(parts.length===2&&uuid.test(parts[1])&&[...query].length===1&&query.get('expand')==='lineItems[*].reservation.inventoryEntry.supplyChannel')return;
+  }
   if(pathname==='custom-objects'&&payload&&typeof payload==='object'){
     const body=payload as Record<string,unknown>;
     if(typeof body.container==='string'&&containers.has(body.container)&&typeof body.key==='string'&&uuid.test(body.key)&&Number.isSafeInteger(body.version)&&Number(body.version)>=0&&body.value!==undefined)return;

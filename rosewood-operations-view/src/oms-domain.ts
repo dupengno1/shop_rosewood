@@ -10,9 +10,10 @@ type Cancellation={cancelledAt?:string;cancellationReason?:string};
 export type Allocation=RequestBase&{status:'planned'|'cancelled';lineItemId:string;sku:string;inventoryEntryId:string;supplyChannelId?:string;quantity:number;inventoryVersionObserved:number;inventoryMode:string;reason:string};
 export type ReturnRequest=RequestBase&Cancellation&{status:'requested'|'receiving'|'received'|'cancelled';kind:'return'|'exchange';lineItemId:string;lineKind:'lineItem'|'customLineItem';quantity:number;reason:string;replacementSku?:string;itemKey:string;attemptedOrderVersion?:number;returnItemId?:string};
 export type RefundRequest=RequestBase&Cancellation&{status:'requested'|'executing'|'completed'|'rejected'|'cancelled';amount:number;currencyCode:string;reason:string};
+export type DigitalFulfilmentRecord=RequestBase&{status:'Pending'|'Completed';mode:'manual'|'simulation';recordedBy:{userId:string};note:string;items:Array<{lineItemId:string;quantity:number}>};
 export type ConsignmentRecord={id:string;groupId:string;status:'Pending'|'Picking'|'Packed'|'Shipped'|'Delivered'|'Failed Delivery';updatedAt:string;reason:string;orderVersionObserved:number};
 export const consignmentTransitions:Record<ConsignmentRecord['status'],ConsignmentRecord['status'][]>= {Pending:['Picking'],Picking:['Packed'],Packed:['Shipped'],Shipped:['Delivered','Failed Delivery'],'Failed Delivery':['Shipped'],Delivered:[]};
-export type OmsOperations={schemaVersion:1;orderId:string;allocations:Allocation[];returns:ReturnRequest[];refunds:RefundRequest[];consignments?:ConsignmentRecord[]};
+export type OmsOperations={schemaVersion:1;orderId:string;allocations:Allocation[];returns:ReturnRequest[];refunds:RefundRequest[];consignments?:ConsignmentRecord[];digitalFulfilment?:DigitalFulfilmentRecord[]};
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function check(value:unknown,message:string):asserts value{if(!value)throw new Error(message);}
 function text(value:unknown,label:string,max=500):string{check(typeof value==='string',`${label} has an invalid format.`);check(!/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value),`${label} must not contain control characters or line breaks.`);const result=value.trim();check(result.length>0&&result.length<=max,`${label} must contain 1–${max}  characters.`);return result;}
@@ -42,9 +43,21 @@ export function validateOmsOperations(value:unknown,orderId:string):OmsOperation
   for(const request of data.refunds){check(['requested','executing','completed','rejected','cancelled'].includes(request.status)&&/^[A-Z]{3}$/.test(request.currencyCode),'Invalid refund request record.');quantity(request.amount,'Refund amount');validateCancellation(request,true);}
   for(const request of [...data.returns,...data.refunds])if(request.approval){check(['pending','approved','rejected'].includes(request.approval.status),'Invalid approval status.');if(request.approval.status!=='pending')check(Number.isFinite(Date.parse(request.approval.reviewedAt||''))&&typeof request.approval.reason==='string'&&request.approval.reason.trim(),'Approval requires a review time and reason.');}
   if(data.consignments!==undefined){check(Array.isArray(data.consignments)&&data.consignments.length<=100,'Invalid consignments.');const groups=new Set<string>();for(const row of data.consignments){check(uuid.test(row.id)&&!ids.has(row.id)&&!groups.has(row.groupId)&&typeof row.groupId==='string'&&row.groupId.length<=100&&['Pending','Picking','Packed','Shipped','Delivered','Failed Delivery'].includes(row.status)&&Number.isFinite(Date.parse(row.updatedAt))&&Number.isSafeInteger(row.orderVersionObserved)&&row.orderVersionObserved>0,'Invalid consignment record.');text(row.reason,'Status reason');groups.add(row.groupId);ids.add(row.id);}}
+  if(data.digitalFulfilment!==undefined){
+    check(Array.isArray(data.digitalFulfilment)&&data.digitalFulfilment.length<=100,'Invalid digital fulfilment history.');
+    let previousTime=0;
+    for(const entry of data.digitalFulfilment){
+      check(entry&&uuid.test(entry.id)&&!ids.has(entry.id)&&['Pending','Completed'].includes(entry.status)&&['manual','simulation'].includes(entry.mode),'Invalid digital fulfilment record.');
+      check(Number.isSafeInteger(entry.orderVersionObserved)&&entry.orderVersionObserved>0&&Number.isFinite(Date.parse(entry.createdAt))&&Date.parse(entry.createdAt)>=previousTime,'Invalid digital fulfilment version or audit time.');
+      text(entry.recordedBy?.userId,'Merchant Center operator ID',160);text(entry.note,'Digital fulfilment note');
+      check(Array.isArray(entry.items)&&entry.items.length>0&&entry.items.length<=200,'Digital fulfilment needs an item snapshot.');
+      const lines=new Set<string>();for(const item of entry.items){check(item&&uuid.test(item.lineItemId)&&!lines.has(item.lineItemId),'Invalid or duplicate digital item snapshot.');quantity(item.quantity);lines.add(item.lineItemId);}
+      ids.add(entry.id);previousTime=Date.parse(entry.createdAt);
+    }
+  }
   return data;
 }
-function ensureNew(data:OmsOperations,order:OmsOrder,id:string){validateOmsOperations(data,order.id);check(![...data.allocations,...data.returns,...data.refunds,...(data.consignments||[])].some(item=>item.id===id),'This request already exists. Refresh to verify; do not save a duplicate.');check(data.allocations.length+data.returns.length+data.refunds.length<200,'This order has reached the operations record limit. Contact your administrator to archive it.');}
+function ensureNew(data:OmsOperations,order:OmsOrder,id:string){validateOmsOperations(data,order.id);check(![...data.allocations,...data.returns,...data.refunds,...(data.consignments||[]),...(data.digitalFulfilment||[])].some(item=>item.id===id),'This request already exists. Refresh to verify; do not save a duplicate.');check(data.allocations.length+data.returns.length+data.refunds.length<200,'This order has reached the operations record limit. Contact your administrator to archive it.');}
 function physical(order:OmsOrder,lineId:string){const lines=fulfillmentLines(order);check(!lines.some(line=>line.overDelivered),'Historical deliveries exceed the ordered quantity. Review them first.');const line=lines.find(item=>item.id===lineId);check(line&&line.classification.type==='physical','This action requires a confirmed physical item.');return line;}
 export function originalLine(order:OmsOrder,lineId:string):OrderLine{const line=[...(order.lineItems||[]),...(order.customLineItems||[])].find(item=>item.id===lineId);check(line,'The order item does not exist.');return line;}
 export function lineInventoryContext(order:OmsOrder,lineId:string){const line=originalLine(order,lineId);const channel=line.supplyChannel as {id?:string}|undefined;return {supplyChannelId:channel?.id,inventoryMode:typeof line.inventoryMode==='string'?line.inventoryMode:order.inventoryMode||'Unknown'};}
@@ -146,10 +159,30 @@ export function reviewOmsRequest(order:OmsOrder,data:OmsOperations,collection:'r
 export function updateConsignment(order:OmsOrder,data:OmsOperations,input:{id:string;groupId:string;status:ConsignmentRecord['status'];reason:string},allowedGroups:string[],at=new Date().toISOString()):OmsOperations{
  validateOmsOperations(data,order.id);check(order.orderState!=='Cancelled','Cancelled orders cannot update fulfilment progress.');check(allowedGroups.includes(input.groupId),'Consignment is not present on the current order.');
  const previous=(data.consignments||[]).find(row=>row.groupId===input.groupId),status=previous?.status||'Pending';
- if(!previous)check(![...data.allocations,...data.returns,...data.refunds,...(data.consignments||[])].some(row=>row.id===input.id),'The operation identifier already exists.');
+ if(!previous)check(![...data.allocations,...data.returns,...data.refunds,...(data.consignments||[]),...(data.digitalFulfilment||[])].some(row=>row.id===input.id),'The operation identifier already exists.');
  check(Boolean(previous)||(data.consignments||[]).length<100,'The consignment record limit has been reached.');
  check(consignmentTransitions[status].includes(input.status),'Invalid consignment transition. Follow Pending, Picking, Packed, Shipped, then Delivered or Failed Delivery.');
  base(order,input.id,at);check(!previous||previous.id===input.id,'Consignment identity changed.');check(!previous||Date.parse(at)>=Date.parse(previous.updatedAt),'Status time precedes the previous update.');
  const row:ConsignmentRecord={id:input.id,groupId:input.groupId,status:input.status,reason:text(input.reason,'Status reason'),updatedAt:at,orderVersionObserved:order.version!};
  return {...data,consignments:[...(data.consignments||[]).filter(item=>item.groupId!==input.groupId),row]};
+}
+
+function digitalItemSnapshot(order:OmsOrder):DigitalFulfilmentRecord['items']{
+  return fulfillmentLines(order).filter(line=>line.kind==='lineItem'&&line.classification.type==='digital').map(line=>({lineItemId:line.id,quantity:line.quantity})).sort((a,b)=>a.lineItemId.localeCompare(b.lineItemId));
+}
+export function currentDigitalFulfilment(order:OmsOrder,data:OmsOperations):DigitalFulfilmentRecord|undefined{
+  const latest=data.digitalFulfilment?.at(-1);
+  return latest&&JSON.stringify(latest.items)===JSON.stringify(digitalItemSnapshot(order))?latest:undefined;
+}
+export function recordDigitalFulfilment(order:OmsOrder,data:OmsOperations,input:{id:string;status:DigitalFulfilmentRecord['status'];mode:DigitalFulfilmentRecord['mode'];operatorId:string;note:string},at=new Date().toISOString()):OmsOperations{
+  ensureNew(data,order,input.id);check(order.orderState!=='Cancelled','Cancelled orders cannot record new digital fulfilment progress.');
+  const items=digitalItemSnapshot(order);check(items.length>0&&items.length<=200,'This order has no supported confirmed digital items.');
+  check(['Pending','Completed'].includes(input.status)&&['manual','simulation'].includes(input.mode),'Choose a digital status and recording basis.');
+  check((data.digitalFulfilment||[]).length<100,'The digital fulfilment history limit has been reached.');
+  const previous=currentDigitalFulfilment(order,data),last=data.digitalFulfilment?.at(-1);
+  check(!previous||previous.status!==input.status,'This digital status is already recorded. Refresh to verify; do not save a duplicate.');
+  check(!previous||input.status==='Pending'||previous.mode===input.mode,'Reopen as Pending before changing the recording basis.');
+  const audit=base(order,input.id,at);check(!last||Date.parse(at)>=Date.parse(last.createdAt),'Audit time precedes the previous digital record.');
+  const entry:DigitalFulfilmentRecord={...audit,status:input.status,mode:input.mode,recordedBy:{userId:text(input.operatorId,'Merchant Center operator ID',160)},note:text(input.note,'Digital fulfilment note'),items};
+  return {...data,digitalFulfilment:[...(data.digitalFulfilment||[]),entry]};
 }
