@@ -15,7 +15,8 @@ export default {
   "oAuthScopes": {
     "view": [
       "view_orders",
-      "view_products"
+      "view_products",
+      "view_payments"
     ],
     "manage": [
       "manage_orders"
