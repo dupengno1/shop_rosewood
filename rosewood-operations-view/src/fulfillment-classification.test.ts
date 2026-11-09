@@ -25,7 +25,7 @@ test('saved order-line fulfillment type takes priority and invalid explicit valu
   for (const value of ['', undefined, null, 'Physical', 'unknown', {key: 'physical'}, ['physical']]) {
     const result = classifyFulfillment({...metadata('physical'), ...explicit(value)}, 'lineItem');
     assert.equal(result.type, 'unknown');
-    assert.equal(result.label, '需确认履约类型');
+    assert.equal(result.label, 'Fulfilment Type Required');
     assert.equal(result.source, 'order-line-custom');
   }
 });
@@ -81,7 +81,7 @@ test('mixed orders only allow positive quantities for confirmed physical lines a
   assert.deepEqual(action.items, [{id: 'physical', quantity: 2}]);
   assert.deepEqual(action.parcels[0].items, action.items);
   for (const id of ['digital', 'service', 'unknown', 'tax', 'duty', 'wrap']) {
-    assert.throws(() => buildDeliveryAction(order, {physical: 1, [id]: 1}, 'TRACK-123', 'DHL', 'new-delivery'), /不能登记实物发运/);
+    assert.throws(() => buildDeliveryAction(order, {physical: 1, [id]: 1}, 'TRACK-123', 'DHL', 'new-delivery'), /Physical dispatch is not allowed/);
   }
   assert.throws(() => buildDeliveryAction(order, {physical: 3}, 'TRACK-123', 'DHL', 'new-delivery'), /remaining 2/);
   assert.deepEqual(order, before);
@@ -91,7 +91,7 @@ test('rebuilding a reviewed action rejects a line whose saved classification cha
   const order = mixedOrder();
   assert.equal(buildDeliveryAction(order, {physical: 1}, 'TRACK', 'DHL', 'new-delivery').items.length, 1);
   order.lineItems![0].custom = {fields: {rwFulfillmentType: 'digital'}};
-  assert.throws(() => buildDeliveryAction(order, {physical: 1}, 'TRACK', 'DHL', 'new-delivery'), /不能登记实物发运/);
+  assert.throws(() => buildDeliveryAction(order, {physical: 1}, 'TRACK', 'DHL', 'new-delivery'), /Physical dispatch is not allowed/);
 });
 
 test('fulfillment instructions display only saved allowlisted values without inventing customization', () => {
@@ -101,9 +101,9 @@ test('fulfillment instructions display only saved allowlisted values without inv
     recipientEmail: 'not-for-display@example.test', giftCode: 'DO-NOT-DISPLAY'};
   const instructions = fulfillmentInstructions({custom: {fields}});
   assert.deepEqual(instructions, [
-    {label: '发运备注', value: 'Handle carefully'}, {label: '定制内容', value: 'K.D.'},
-    {label: '领取地点', value: 'Hong Kong'}, {label: '领取日期', value: '2026-11-07'}, {label: '领取时段', value: '14:00–15:00'},
-    {label: '礼品包装', value: '不需要'}, {label: '礼篮组件', value: 'CANDLE、NOTE'},
+    {label: 'Fulfilment Notes', value: 'Handle carefully'}, {label: 'Personalization', value: 'K.D.'},
+    {label: 'Collection Location', value: 'Hong Kong'}, {label: 'Collection Date', value: '2026-11-07'}, {label: 'Collection Time', value: '14:00–15:00'},
+    {label: 'Gift Wrapping', value: 'No'}, {label: 'Bundle Items', value: 'CANDLE、NOTE'},
   ]);
   assert.ok(!JSON.stringify(instructions).includes('DO-NOT-DISPLAY'));
   assert.ok(!JSON.stringify(instructions).includes('@'));
