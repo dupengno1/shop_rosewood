@@ -1,4 +1,5 @@
 import React,{useCallback,useEffect,useRef,useState} from 'react';
+import {useApplicationContext} from '@commercetools-frontend/application-shell-connectors';
 import Spacings from '@commercetools-uikit/spacings';
 import Text from '@commercetools-uikit/text';
 import TextField from '@commercetools-uikit/text-field';
@@ -16,38 +17,43 @@ import {readOperation,createOperation,updateOperation,operationStatus,type Opera
 import {Notice,Section} from './shared';
 import {OMS_CONTAINER,emptyOmsOperations,validateOmsOperations,createAllocation,cancelAllocation,lineInventoryContext,
   createReturnRequest,prepareReturnReceipt,reconcileReturnReceipt,releaseRejectedReceipt,refundBudget,createRefundRequest,
-  cancelReturnRequest,cancelRefundRequest,returnCapacity,reviewOmsRequest,updateConsignment,consignmentTransitions,type ConsignmentRecord,
+  cancelReturnRequest,cancelRefundRequest,returnCapacity,reviewOmsRequest,updateConsignment,consignmentTransitions,recordDigitalFulfilment,currentDigitalFulfilment,type DigitalFulfilmentRecord,type ConsignmentRecord,
   type OmsOrder,type OmsOperations,type OmsInventory} from './oms-domain';
 import {parseOmsMajorAmount,formatOmsMoney} from './oms-money';
+import {readOrderReservationCart,orderReservationRows,reservationTotal,type ReservationObservation} from './order-reservations';
 
 type Document=OperationDocument<OmsOperations>;
-type Marker={id:string;collection:'allocations'|'returns'|'refunds'|'consignments';status:string;approval?:string};
-type Preview={orderVersion:number;documentVersion:number;summary:string;marker:Marker;build?:(order:OmsOrder,data:OmsOperations,inventory?:OmsInventory)=>OmsOperations;inventory?:OmsInventory;receiptId?:string};
+type Marker={id:string;collection:'allocations'|'returns'|'refunds'|'consignments'|'digitalFulfilment';status:string;approval?:string};
+type Preview={actorId?:string;orderVersion:number;documentVersion:number;summary:string;marker:Marker;build?:(order:OmsOrder,data:OmsOperations,inventory?:OmsInventory)=>OmsOperations;inventory?:OmsInventory;receiptId?:string};
 const statuses:Record<string,string>={planned:'Planned — not reserved',cancelled:'Cancelled',requested:'Requested — awaiting execution',receiving:'Receipt reconciliation required',received:'Receipt recorded',executing:'Execution pending',completed:'Completed',rejected:'Rejected'};
 
 export default function OrderOperations({order:initialOrder,canManage,onReload,onBusyChange}:{order:OmsOrder;canManage:boolean;onReload?:()=>void|Promise<void>;onBusyChange?:(busy:boolean)=>void}){
+  const operatorId=useApplicationContext(context=>context.user?.id);
   const api=useCommerceApi(),lock=useRef(false),storageKey=`rw-oms-operation-attempt:${initialOrder.id}`;
   const [order,setOrder]=React.useState(initialOrder),[document,setDocument]=useState<Document>(),[loading,setLoading]=useState(true),[busy,setBusy]=useState(false);
   const [error,setError]=useState(''),[message,setMessage]=useState(''),[blocked,setBlocked]=useState(false),[preview,setPreview]=useState<Preview>();
   const [lineId,setLineId]=useState(''),[inventoryId,setInventoryId]=useState(''),[inventories,setInventories]=useState<OmsInventory[]>([]),[inventoryLoading,setInventoryLoading]=useState(false),[inventoryError,setInventoryError]=useState('');
   const [allocationQuantity,setAllocationQuantity]=useState(''),[allocationReason,setAllocationReason]=useState('');
   const [returnKind,setReturnKind]=useState<'return'|'exchange'>('return'),[returnLineId,setReturnLineId]=useState(''),[returnQuantity,setReturnQuantity]=useState(''),[returnReason,setReturnReason]=useState(''),[replacement,setReplacement]=useState('');
+  const [digitalStatus,setDigitalStatus]=useState<DigitalFulfilmentRecord['status']|''>(''),[digitalMode,setDigitalMode]=useState<DigitalFulfilmentRecord['mode']|''>(''),[digitalNote,setDigitalNote]=useState('');
   const [refundAmount,setRefundAmount]=useState(''),[refundReason,setRefundReason]=useState('');
+  const [reservationObservation,setReservationObservation]=useState<ReservationObservation>({}),[reservationClock,setReservationClock]=useState(Date.now());
   const [cancellationReasons,setCancellationReasons]=useState<Record<string,string>>({});
   const [statusReasons,setStatusReasons]=useState<Record<string,string>>({}),[nextStatuses,setNextStatuses]=useState<Record<string,ConsignmentRecord['status']>>({}),[approvalReasons,setApprovalReasons]=useState<Record<string,string>>({});
   const data=document?.value||emptyOmsOperations(initialOrder.id);
   const clearPreview=()=>setPreview(undefined);
   const reload=useCallback(async()=>{
-    setLoading(true);setError('');setPreview(undefined);
+    setLoading(true);setError('');setPreview(undefined);setReservationObservation({});
     try{
       const [fresh,stored]=await Promise.all([api<OmsOrder>(`orders/${initialOrder.id}?expand=lineItems[*].supplyChannel&expand=paymentInfo.payments[*]`),readOperation<OmsOperations>(api,OMS_CONTAINER,initialOrder.id)]);
       if(stored)validateOmsOperations(stored.value,initialOrder.id);
       if(fresh.id!==initialOrder.id)throw new Error('The returned order does not match the request.');
+      setReservationObservation(await readOrderReservationCart(api,fresh as Order));setReservationClock(Date.now());
       setOrder(fresh);setDocument(stored);
       const raw=window.sessionStorage.getItem(storageKey);
       if(raw){
         const marker=JSON.parse(raw) as Marker;
-        const collection=marker.collection==='allocations'||marker.collection==='returns'||marker.collection==='refunds'||marker.collection==='consignments'?marker.collection:undefined;
+        const collection=marker.collection==='allocations'||marker.collection==='returns'||marker.collection==='refunds'||marker.collection==='consignments'||marker.collection==='digitalFulfilment'?marker.collection:undefined;
         if(collection&&stored?.value[collection]?.some(item=>item.id===marker.id&&item.status===marker.status&&(!marker.approval||('approval' in item&&item.approval?.status===marker.approval)))){
           window.sessionStorage.removeItem(storageKey);setBlocked(false);setMessage('The previous operation was confirmed. No duplicate was submitted.');
         }else{setBlocked(true);setError('The previous save is unconfirmed. New writes are paused. Refresh to verify or contact your administrator; there is no automatic retry.');}
@@ -55,6 +61,7 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
     }catch(e){setBlocked(true);setError(errorMessage(e));}finally{setLoading(false);}
   },[api,initialOrder.id,storageKey]);
   useEffect(()=>{void reload();},[reload,initialOrder.version]);
+  useEffect(()=>{const timer=setInterval(()=>setReservationClock(Date.now()),15000);return ()=>clearInterval(timer);},[]);
   useEffect(()=>{onBusyChange?.(busy);return ()=>onBusyChange?.(false);},[busy,onBusyChange]);
   useEffect(()=>{
     let active=true;setInventories([]);setInventoryId('');setInventoryError('');
@@ -98,6 +105,7 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
     try{
       const [fresh,stored]=await Promise.all([api<OmsOrder>(`orders/${initialOrder.id}?expand=lineItems[*].supplyChannel&expand=paymentInfo.payments[*]`),readOperation<OmsOperations>(api,OMS_CONTAINER,initialOrder.id)]);
       const current=stored?validateOmsOperations(stored.value,initialOrder.id):emptyOmsOperations(initialOrder.id);
+      if(chosen.actorId&&chosen.actorId!==operatorId)throw new Error('The Merchant Center operator changed. Refresh and review again.');
       if(fresh.id!==initialOrder.id||fresh.version!==chosen.orderVersion||(stored?.version||0)!==chosen.documentVersion)throw new Error('The order or operations record changed. Refresh and review again.');
       if(chosen.receiptId){
         const prepared=prepareReturnReceipt(fresh,current,chosen.receiptId);
@@ -126,8 +134,8 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
           inventory=live;
         }
         await persist(chosen.build!(fresh,current,inventory),stored,chosen.marker);setOrder(fresh);
-        setMessage(chosen.marker.status==='cancelled'?'The request or plan was cancelled and retained for audit. Native returns, stock and payments are unchanged; capacity has been recalculated.':'Operation saved. Allocation plans do not reserve stock; return, exchange and refund requests await execution.');
-        setAllocationQuantity('');setAllocationReason('');setReturnQuantity('');setReturnReason('');setReplacement('');setRefundAmount('');setRefundReason('');
+        setMessage(chosen.marker.collection==='digitalFulfilment'?'Digital fulfilment record saved with its operator and item snapshot. No email, gift card, payment or native shipment was executed.':chosen.marker.status==='cancelled'?'The request or plan was cancelled and retained for audit. Native returns, stock and payments are unchanged; capacity has been recalculated.':'Operation saved. Allocation plans do not reserve stock; return, exchange and refund requests await execution.');
+        setAllocationQuantity('');setAllocationReason('');setReturnQuantity('');setReturnReason('');setReplacement('');setRefundAmount('');setRefundReason('');setDigitalStatus('');setDigitalMode('');setDigitalNote('');
         setCancellationReasons(previous=>{const next={...previous};delete next[chosen.marker.id];return next;});
       }
       setPreview(undefined);
@@ -143,7 +151,7 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
       await persist(next,stored,{id,collection:'returns',status:'received'});setOrder(fresh);setMessage('Native receipt verified using its stable return key. No duplicate was created.');await onReload?.();
     }catch(e){setError(errorMessage(e));}finally{lock.current=false;setBusy(false);}
   }
-  const groups=orderConsignments(order as Order);
+  const groups=orderConsignments(order as Order),digitalRecord=currentDigitalFulfilment(order,data),reservationRows=orderReservationRows(order as Order,reservationObservation,reservationClock);
   const approvalActions=(collection:'returns'|'refunds',id:string,status:string,approval?:{status:string})=>status==='requested'&&(!approval||approval.status==='pending')?<Spacings.Stack scale="s"><TextField name={`approval-${id}`} title="Approval reason" value={approvalReasons[id]||''} isDisabled={disabled} onChange={event=>{setApprovalReasons(previous=>({...previous,[id]:event.target.value}));clearPreview();}}/><Spacings.Inline>{(['approved','rejected'] as const).map(decision=><SecondaryButton key={decision} label={decision==='approved'?'Review approval':'Review rejection'} isDisabled={disabled} onClick={()=>showPreview({marker:{id,collection,status:collection==='refunds'&&decision==='rejected'?'rejected':'requested',approval:decision},summary:`Record ${decision} decision for this request. This does not execute a refund, restock or create a replacement order.`,build:(fresh,current)=>reviewOmsRequest(fresh,current,collection,id,decision,approvalReasons[id]||'')})}/>)}</Spacings.Inline></Spacings.Stack>:null;
   return <Section title="OMS · Allocation, Returns & Refund Requests">
     <Notice error={error||domainError} message={message}/>
@@ -154,20 +162,39 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
       {!groups.length&&<Text.Body>No fulfilment groups are recorded on this order.</Text.Body>}
       {groups.map((group,index)=>{const stored=data.consignments?.find(item=>item.groupId===group.id);const status=stored?.status||'Pending';return <Spacings.Stack scale="m" key={group.id}>
         <Text.Subheadline as="h4">Consignment {index+1} · {group.warehouse}</Text.Subheadline>
-        <Text.Body>Status: {group.digital?'Digital fulfilment status not recorded':stored?status:'Pending (no progress recorded)'}</Text.Body>
+        <Text.Body>Status: {group.digital?(digitalRecord?`${digitalRecord.status} (${digitalRecord.mode==='simulation'?'simulated record':'manually recorded'})`:'Digital fulfilment status not recorded'):stored?status:'Pending (no progress recorded)'}</Text.Body>
         <DataTable isCondensed rows={group.lines} columns={[{key:'name',label:'Product'},{key:'sku',label:'SKU'},{key:'quantity',label:'Quantity'}]} itemRenderer={(row,col)=>row[col.key as 'name'|'sku'|'quantity']}/>
         {stored&&<Text.Detail>Updated {stored.updatedAt} · {stored.reason}</Text.Detail>}
+        {group.digital&&<>
+          <ContentNotification type="info">Record an operator-reported or simulated digital fulfilment status. This does not send an email or gift card, call a delivery provider, or change payment or native shipment state. Completed is a recorded statement, not provider-confirmed delivery.</ContentNotification>
+          {data.digitalFulfilment?.length&&!digitalRecord?<ContentNotification type="warning">The digital items differ from the latest recorded item snapshot. Review the current items before recording a new status.</ContentNotification>:null}
+          {!operatorId&&<ContentNotification type="warning">Your Merchant Center operator identity is unavailable. Digital status recording is disabled.</ContentNotification>}
+          <SelectField name="digital-status" title="Digital Status to Record" value={digitalStatus} options={(['Pending','Completed'] as const).filter(value=>value!==digitalRecord?.status).map(value=>({value,label:value}))} isDisabled={disabled||!operatorId||order.orderState==='Cancelled'} onChange={event=>{setDigitalStatus(String(event.target.value) as DigitalFulfilmentRecord['status']);clearPreview();}}/>
+          <SelectField name="digital-mode" title="Recording Basis" value={digitalMode} options={[{value:'manual',label:'Operator report (not provider-verified)'},{value:'simulation',label:'Simulation / QA (no delivery)'}]} isDisabled={disabled||!operatorId||order.orderState==='Cancelled'} onChange={event=>{setDigitalMode(String(event.target.value) as DigitalFulfilmentRecord['mode']);clearPreview();}}/>
+          <TextField name="digital-note" title="Digital Fulfilment Note" value={digitalNote} isDisabled={disabled||!operatorId||order.orderState==='Cancelled'} onChange={event=>{setDigitalNote(event.target.value);clearPreview();}}/>
+          <SecondaryButton label="Review Digital Status Record" isDisabled={disabled||!operatorId||!digitalStatus||!digitalMode||!digitalNote.trim()||order.orderState==='Cancelled'} onClick={()=>{if(!operatorId||!digitalStatus||!digitalMode)return;const id=crypto.randomUUID(),input={id,status:digitalStatus,mode:digitalMode,operatorId,note:digitalNote};showPreview({actorId:operatorId,marker:{id,collection:'digitalFulfilment',status:digitalStatus},summary:`Record all ${group.lines.length} digital order items as ${digitalStatus}, basis ${digitalMode==='simulation'?'Simulation / QA':'Operator report'}, by Merchant Center user ${operatorId}. This records a statement only; no email, gift card, payment or native shipment is executed.`,build:(fresh,current)=>recordDigitalFulfilment(fresh,current,input)});}}/>
+          {(data.digitalFulfilment||[]).map(entry=><Spacings.Stack key={entry.id} scale="xs"><Text.Body>{entry.status} · {entry.mode==='simulation'?'Simulation / QA — no delivery':'Operator report — not provider-verified'}</Text.Body><Text.Detail>Recorded at {entry.createdAt} · Merchant Center user {entry.recordedBy.userId} · Order version {entry.orderVersionObserved}</Text.Detail><Text.Detail>{entry.note}</Text.Detail><Text.Detail>Item snapshot: {entry.items.map(item=>`${item.lineItemId} × ${item.quantity}`).join('; ')} · Record {entry.id}</Text.Detail></Spacings.Stack>)}
+        </>}
         {!group.digital&&<><SelectField name={`consignment-status-${group.id}`} title="Next Status" value={consignmentTransitions[status].includes(nextStatuses[group.id])?nextStatuses[group.id]:''} options={consignmentTransitions[status].map(value=>({value,label:value}))} isDisabled={disabled||status==='Delivered'} onChange={event=>{setNextStatuses(previous=>({...previous,[group.id]:String(event.target.value) as ConsignmentRecord['status']}));clearPreview();}}/>
         <TextField name={`consignment-reason-${group.id}`} title="Status Reason" value={statusReasons[group.id]||''} isDisabled={disabled||status==='Delivered'} onChange={event=>{setStatusReasons(previous=>({...previous,[group.id]:event.target.value}));clearPreview();}}/>
         <SecondaryButton label="Review Consignment Update" isDisabled={disabled||!consignmentTransitions[status].includes(nextStatuses[group.id])} onClick={()=>{const id=stored?.id||crypto.randomUUID(),nextStatus=nextStatuses[group.id];showPreview({marker:{id,collection:'consignments',status:nextStatus},summary:`Record ${group.warehouse} status as ${nextStatus}. No shipment or financial action is executed.`,build:(fresh,current)=>updateConsignment(fresh,current,{id,groupId:group.id,status:nextStatus,reason:statusReasons[group.id]||''},orderConsignments(fresh as Order).filter(row=>!row.digital).map(row=>row.id))});}}/></>}
       </Spacings.Stack>;})}
     </Section>
     <Section title="Inventory Allocation">
-      <Text.Detail>Native order assignment and saved plans are shown separately. Planned quantities are not reservations. An order-specific live reserved balance is not exposed by the native InventoryEntry API.</Text.Detail>
-      <DataTable isCondensed rows={groups.filter(group=>!group.digital).map(group=>({id:group.id,warehouse:group.warehouse,assigned:group.lines.reduce((sum,line)=>sum+line.quantity,0),planned:data.allocations.filter(item=>item.status==='planned'&&(item.supplyChannelId||'unassigned')===group.id).reduce((sum,item)=>sum+item.quantity,0)}))} columns={[{key:'warehouse',label:'Warehouse'},{key:'assigned',label:'Ordered Qty'},{key:'planned',label:'Planned Qty'},{key:'reserved',label:'Reserved Qty'}]} itemRenderer={(row,col)=>col.key==='reserved'?'Not available':row[col.key as 'warehouse'|'assigned'|'planned']}/>
+      <Text.Detail>Ordered quantities and allocation plans are separate from native reservations. Active Reserved Qty is read from this order's source Cart and verified against each item and Inventory Entry; it is never inferred from ordered quantities or inventory totals.</Text.Detail>
+      <Text.Detail>Source Cart: {(order as Order).cart?.id||'Not recorded'} · Cart State: {reservationObservation.cart?.cartState||'Not recorded'} · Observed: {reservationObservation.observedAt||'Not recorded'}. Use Refresh Operations / Verify Result to read the latest state.</Text.Detail>
+      {reservationObservation.error&&<ContentNotification type="warning">{reservationObservation.error}</ContentNotification>}
+      <DataTable isCondensed rows={groups.filter(group=>!group.digital).map(group=>{const rows=reservationRows.filter(row=>group.lines.some(line=>line.id===row.id));return {id:group.id,warehouse:group.warehouse,assigned:group.lines.reduce((sum,line)=>sum+line.quantity,0),planned:data.allocations.filter(item=>item.status==='planned'&&(item.supplyChannelId||'unassigned')===group.id).reduce((sum,item)=>sum+item.quantity,0),reserved:loading?null:reservationTotal(rows,'active'),committed:loading?null:reservationTotal(rows,'committed')};})} columns={[{key:'warehouse',label:'Warehouse'},{key:'assigned',label:'Ordered Qty'},{key:'planned',label:'Planned Qty'},{key:'reserved',label:'Active Reserved Qty'},{key:'committed',label:'Committed Qty'}]} itemRenderer={(row,col)=>row[col.key as 'warehouse'|'assigned'|'planned'|'reserved'|'committed']??'Unknown'}/>
+      <Text.Detail>Missing legacy reservations are Not recorded. A missing, inaccessible or mismatched reference remains Unknown in totals. Digital items and explicitly untracked items without a reservation are excluded. Committed means inventory was deducted for fulfilment, not still held. Expiry processing can take a few minutes; no released state is inferred from the clock. This is the current native record, not a complete reservation event history.</Text.Detail>
+      {reservationRows.filter(row=>groups.some(group=>!group.digital&&group.lines.some(line=>line.id===row.id))).map(row=><Spacings.Stack scale="xs" key={row.id}>
+        <Text.Body>{row.sku} · {row.warehouse} · {loading?'Reading native reservation…':row.state}</Text.Body>
+        <Text.Detail>Order Item: {row.id} · Cart Item: {row.cartLineId||'Not recorded'} · Reservation: {row.reservationId||'Not recorded'}</Text.Detail>
+        <Text.Detail>Native Quantity: {row.quantity??'Unknown'} · Active Reserved: {row.active??'Unknown'} · Committed: {row.committed??'Unknown'} · Expires At: {row.expiresAt||'Not recorded'}</Text.Detail>
+        <Text.Detail>{row.detail}</Text.Detail>
+      </Spacings.Stack>)}
     </Section>
     <Section title="Allocation Plans">
-      <ContentNotification type="info">Plans do not change the original fulfilment warehouse. Tracked items remain bound to that warehouse. Low available stock may reflect the order's existing reservation. Review and cancel consumed plans after shipment.</ContentNotification>
+      <ContentNotification type="info">Plans do not change the original fulfilment warehouse. Tracked items remain bound to that warehouse. Stock may already have been deducted when an order was created; the saved inventory mode does not prove an active reservation. No order-specific reserved quantity is inferred. Review and cancel consumed plans after shipment.</ContentNotification>
       <SelectField name="allocation-line" title="Physical Order Item" value={lineId} options={options.filter(option=>order.lineItems?.some(line=>line.id===option.value))} isDisabled={disabled} onChange={event=>{setLineId(String(event.target.value));clearPreview();}}/>
       {context&&<Text.Detail>Original Warehouse: {context.supplyChannelId||'Unassigned'} · Inventory Mode: {context.inventoryMode}</Text.Detail>}
       <Notice error={inventoryError}/>
