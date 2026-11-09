@@ -23,6 +23,7 @@ export type Product = {id:string;key?:string;version:number;priceMode?:string;ma
 export type Parcel = {id:string;trackingData?:{trackingId?:string;carrier?:string};items?:{id:string;quantity:number}[]};
 export type Delivery = {id:string;key?:string;createdAt?:string;items:{id:string;quantity:number}[];parcels:Parcel[]};
 export type Order = {id:string;version:number;orderNumber?:string;orderState?:string;shippingMode?:string;inventoryMode?:string;
+  cart?:{typeId?:string;id:string};
   customerId?:string;customerEmail?:string;paymentState?:string;shipmentState?:string;
   shippingAddress?:{firstName?:string;lastName?:string};billingAddress?:{firstName?:string;lastName?:string};
   store?:{key?:string;id?:string;obj?:{key?:string}};custom?:{fields:Record<string,unknown>};

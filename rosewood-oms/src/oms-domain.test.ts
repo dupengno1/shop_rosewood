@@ -198,3 +198,35 @@ test('consignment transitions are monotonic, versioned and do not modify native 
  assert.throws(()=>createRefundRequest(o,next,{id:id(50),amount:1,currencyCode:'USD',reason:'Refund'},time),/already exists/);
  assert.equal(next.allocations.length,0);assert.deepEqual(o,original);assert.equal(validateOmsOperations(next,o.id),next);
 });
+
+test('digital progress records a classified item snapshot and append-only operator audit without changing the native order',async()=>{
+ const {recordDigitalFulfilment,currentDigitalFulfilment}=await import('./oms-domain');
+ const o={...order(),lineItems:[...order().lineItems!,{id:id(40),name:{en:'Digital QA'},quantity:2,variant:{sku:'QA-DIGITAL'},custom:{fields:{rwFulfillmentType:'digital'}}}]},original=structuredClone(o);
+ const input={id:id(41),status:'Pending' as const,mode:'simulation' as const,operatorId:'mc-user-qa',note:'QA only; no message is sent'};
+ const pending=recordDigitalFulfilment(o,emptyOmsOperations(o.id),input,time);
+ const done=recordDigitalFulfilment(o,pending,{...input,id:id(42),status:'Completed'},'2026-11-05T11:01:00.000Z');
+ assert.equal(currentDigitalFulfilment(o,done)?.status,'Completed');assert.equal(done.digitalFulfilment?.length,2);
+ assert.deepEqual(done.digitalFulfilment?.[1].items,[{lineItemId:id(40),quantity:2}]);assert.equal(done.digitalFulfilment?.[1].recordedBy.userId,'mc-user-qa');
+ assert.equal(done.digitalFulfilment?.[1].orderVersionObserved,4);assert.equal(done.digitalFulfilment?.[1].mode,'simulation');assert.deepEqual(o,original);
+ assert.equal(validateOmsOperations(done,o.id),done);
+ assert.throws(()=>recordDigitalFulfilment(o,done,{...input,id:id(43),status:'Completed'},time),/already recorded/);
+ const reopened=recordDigitalFulfilment(o,done,{...input,id:id(43),mode:'manual',note:'Operator correction; pending manual confirmation'},'2026-11-05T11:02:00.000Z');
+ assert.equal(reopened.digitalFulfilment?.length,3);assert.deepEqual(reopened.digitalFulfilment?.slice(0,2),done.digitalFulfilment);
+ const changed={...o,lineItems:o.lineItems.map(line=>line.id===id(40)?{...line,quantity:3}:line)};
+ assert.equal(currentDigitalFulfilment(changed,done),undefined,'An old completed snapshot cannot cover subsequently changed digital quantity.');
+});
+test('digital records reject physical-only/cancelled orders, anonymous actors, malformed history and duplicate identities',async()=>{
+ const {recordDigitalFulfilment}=await import('./oms-domain');const physicalOrder=order(),data=emptyOmsOperations(physicalOrder.id);
+ const o={...physicalOrder,lineItems:[{id:id(40),quantity:1,variant:{sku:'QA-DIGITAL'},custom:{fields:{rwFulfillmentType:'digital'}}}]};
+ const input={id:id(41),status:'Pending' as const,mode:'simulation' as const,operatorId:'mc-user-qa',note:'QA note'};
+ assert.throws(()=>recordDigitalFulfilment(physicalOrder,data,input,time),/confirmed digital/);
+ assert.throws(()=>recordDigitalFulfilment({...o,orderState:'Cancelled'},data,input,time),/Cancelled/);
+ assert.throws(()=>recordDigitalFulfilment(o,data,{...input,operatorId:''},time),/operator ID/);
+ assert.throws(()=>recordDigitalFulfilment(o,data,{...input,note:'\ninvalid'},time),/control characters/);
+ const pending=recordDigitalFulfilment(o,data,input,time);
+ assert.throws(()=>recordDigitalFulfilment(o,pending,{...input,status:'Completed'},time),/already exists/);
+ assert.throws(()=>recordDigitalFulfilment(o,pending,{...input,id:id(42),status:'Completed',mode:'manual'},time),/recording basis/);
+ assert.throws(()=>recordDigitalFulfilment(o,pending,{...input,id:id(42),status:'Completed'},'2026-11-05T10:59:00.000Z'),/precedes/);
+ assert.throws(()=>validateOmsOperations({...pending,digitalFulfilment:[...pending.digitalFulfilment!,...pending.digitalFulfilment!]},o.id),/Invalid digital/);
+ assert.throws(()=>validateOmsOperations({...pending,digitalFulfilment:[{...pending.digitalFulfilment![0],recordedBy:{userId:''}}]},o.id),/operator ID/);
+});
