@@ -50,6 +50,6 @@ test('recorded delivery methods take precedence and incomplete or mixed orders n
  assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,custom:undefined}],inventoryMode:'None'}),[]);
  assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,quantity:0}]}),[]);
  for(const value of [{kind:'digital'},JSON.stringify({kind:{key:'digital',label:'Digital'}}),'not-json'])assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,custom:undefined,variant:{attributes:[{name:'rwProductInfo',value}]}}]}),[]);
- assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,custom:{fields:{rwFulfillmentType:{key:'digital',label:'Digital'}}}}]}),[]);
+ assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,custom:{type:{id:'type'},fields:{rwFulfillmentType:{key:'digital',label:'Digital'}}}}]}),[]);
  assert.deepEqual(orderDeliveryMethods({...order,customLineItems:[{id:'unknown-custom',name:{en:'Unclassified'},quantity:1}]}),[]);
 });
