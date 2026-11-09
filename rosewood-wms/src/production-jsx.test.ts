@@ -59,6 +59,14 @@ test('OMS order information renders real classic production JSX without implying
  assert.match(simulated,/PayMe \(simulated selection\)/);assert.match(simulated,/Pending/);
  assert.match(simulated,/not evidence of a payment capture/);assert.doesNotMatch(simulated,/>Paid</);
 });
+test('production order information labels a digital-only category without claiming delivery execution',()=>{
+ const components=load('oms-presentation.tsx');
+ const digitalOrder:Order={...order,lineItems:[{id:'gift',name:{en:'Gift'},quantity:1,variant:{sku:'GIFT',attributes:[{name:'rwProductInfo',value:JSON.stringify({kind:'digital'})}]}}]};
+ const html=render(components.OrderInformation,{order:digitalOrder});
+ assert.match(html,/Digital Delivery \(item classification\)/);assert.doesNotMatch(html,/>Completed<|>Delivered<|>Paid</);
+ const mixed=render(components.OrderInformation,{order:{...digitalOrder,lineItems:[...digitalOrder.lineItems,{id:'unknown',name:{en:'Unclassified'},quantity:1,variant:{sku:'UNKNOWN'}}]}});
+ assert.doesNotMatch(mixed,/Digital Delivery/);assert.match(mixed,/Not recorded/);
+});
 test('production rendering regression rejects the original missing React fragment import',()=>{
  for(const [file,exportName,props] of [
   ['product-operations.tsx','default',{project:'qa-project'}],

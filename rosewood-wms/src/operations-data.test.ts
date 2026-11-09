@@ -34,3 +34,22 @@ test('native checkout simulation metadata labels the selected method without rep
  assert.deepEqual(orderPaymentMethods({...order,custom:{fields:{rwPaymentMethod:'wechat'}}}),['WeChat Pay']);
  assert.deepEqual(orderPaymentMethods({...order,paymentState:'Paid',paymentInfo:{payments:[{id:'native-payment',obj:{paymentMethodInfo:{method:'card'}}}]}}),['Credit Card','UnionPay (simulated selection)']);
 });
+test('all-digital saved order snapshots supply an explicitly classified delivery category when no native method exists',()=>{
+ const order:Order={id:'digital-order',version:1,lineItems:[{id:'gift',name:{en:'Gift'},quantity:1,variant:{sku:'GIFT',attributes:[{name:'rwProductInfo',value:JSON.stringify({kind:'digital'})}]}}],customLineItems:[]};
+ assert.deepEqual(orderDeliveryMethods(order),['Digital Delivery (item classification)']);
+ assert.deepEqual(orderDeliveryMethods({...order,custom:{fields:{rwDeliveryMethod:' '}}}),['Digital Delivery (item classification)']);
+ assert.deepEqual(orderDeliveryMethods({...order,lineItems:[],customLineItems:[{id:'custom-gift',name:{en:'Gift'},quantity:1,custom:{type:{id:'type'},fields:{rwFulfillmentType:'digital'}}}]}),['Digital Delivery (item classification)']);
+});
+test('recorded delivery methods take precedence and incomplete or mixed orders never imply digital delivery',()=>{
+ const digital={id:'digital',name:{en:'Gift'},quantity:1,variant:{sku:'DIGITAL-NAME-IS-NOT-EVIDENCE'},custom:{type:{id:'type'},fields:{rwFulfillmentType:'digital'}}};
+ const order:Order={id:'order',version:1,lineItems:[digital],customLineItems:[]};
+ assert.deepEqual(orderDeliveryMethods({...order,shippingInfo:{shippingMethodName:'Hotel Collection',deliveries:[]}}),['Hotel Collection']);
+ assert.deepEqual(orderDeliveryMethods({...order,custom:{fields:{rwDeliveryMethod:'email'}}}),['Digital Delivery']);
+ assert.deepEqual(orderDeliveryMethods({...order,lineItems:[]}),[]);
+ for(const type of ['physical','service','unexpected'])assert.deepEqual(orderDeliveryMethods({...order,lineItems:[digital,{...digital,id:'other',custom:{type:{id:'type'},fields:{rwFulfillmentType:type}}}]}),[]);
+ assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,custom:undefined}],inventoryMode:'None'}),[]);
+ assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,quantity:0}]}),[]);
+ for(const value of [{kind:'digital'},JSON.stringify({kind:{key:'digital',label:'Digital'}}),'not-json'])assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,custom:undefined,variant:{attributes:[{name:'rwProductInfo',value}]}}]}),[]);
+ assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,custom:{type:{id:'type'},fields:{rwFulfillmentType:{key:'digital',label:'Digital'}}}}]}),[]);
+ assert.deepEqual(orderDeliveryMethods({...order,customLineItems:[{id:'unknown-custom',name:{en:'Unclassified'},quantity:1}]}),[]);
+});

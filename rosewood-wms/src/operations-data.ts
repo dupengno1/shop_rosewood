@@ -59,10 +59,14 @@ export function isSimulatedPaymentSelection(order:Order):boolean{
   return order.custom?.fields?.rwPaymentStatus==='simulated-approved';
 }
 export function orderDeliveryMethods(order:Order):string[]{
-  const methods=[order.shippingInfo?.shippingMethodName,...(order.shipping||[]).map(row=>row.shippingInfo?.shippingMethodName)].filter((value):value is string=>Boolean(value));
+  const methods=[order.shippingInfo?.shippingMethodName,...(order.shipping||[]).map(row=>row.shippingInfo?.shippingMethodName)].filter((value):value is string=>typeof value==='string'&&Boolean(value.trim()));
   const custom=order.custom?.fields?.rwDeliveryMethod;
-  if(typeof custom==='string')methods.push(custom);
-  return [...new Set(methods.map(deliveryMethod))];
+  if(typeof custom==='string'&&custom.trim())methods.push(custom);
+  if(methods.length)return [...new Set(methods.map(deliveryMethod))];
+  // A reliable order-item snapshot can establish the digital delivery category,
+  // not delivery execution. Never infer it from SKU, stock mode or an empty order.
+  const items=[...(order.lineItems||[]).map(line=>({line,kind:'lineItem' as const})),...(order.customLineItems||[]).map(line=>({line,kind:'customLineItem' as const}))];
+  return items.length&&items.every(({line,kind})=>Number.isSafeInteger(line.quantity)&&line.quantity>0&&classifyFulfillment(line,kind).type==='digital')?['Digital Delivery (item classification)']:[];
 }
 export type ConsignmentGroup={id:string;warehouse:string;lines:Array<{id:string;sku:string;name:string;quantity:number}>;digital:boolean;nativeReserved:number|null};
 export function orderConsignments(order:Order):ConsignmentGroup[]{
