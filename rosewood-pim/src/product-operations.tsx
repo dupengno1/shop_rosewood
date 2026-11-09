@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import React,{useEffect,useState} from 'react';
 import DataTable from '@commercetools-uikit/data-table';
 import Spacings from '@commercetools-uikit/spacings';
 import Text from '@commercetools-uikit/text';
@@ -43,7 +43,7 @@ export function ProductOperationsDetail({product}:{product:Product}){
   </Section>
   <Section title="Inventory Summary">
    <SecondaryButton label="Refresh operational information" isDisabled={loading} onClick={()=>setAttempt(n=>n+1)}/><Notice error={error}/>
-   {loading?<LoadingSpinner/>:data.digital?<Text.Body>Digital Delivery — physical inventory does not apply. Availability depends on the product's published status and selling configuration.</Text.Body>:<>
+   {loading?<LoadingSpinner/>:data.digital?<Text.Body>Digital Delivery — physical inventory does not apply. Availability depends on the product's published status and selling configuration.</Text.Body>:<React.Fragment>
    <DataTable isCondensed rows={channels.map(channel=>({id:channel,channel,...inventorySummary(rows.filter(row=>warehouseName(row.supplyChannel)===channel),!error)}))} columns={[{key:'channel',label:'Warehouse'},{key:'available',label:'Available'},{key:'reserved',label:'Reserved / unavailable'}]} itemRenderer={(row,col)=>row[col.key as keyof typeof row]??'Unknown'}/>
    <Text.Body>Total Available Inventory: {data.summary.available??'Unknown'} · Inventory Status: {data.summary.status}</Text.Body>
    <Text.Detail>Reserved / unavailable is the observed on-stock minus available quantity. It is not an order-specific reservation ledger. Missing inventory records are Unknown, not zero.</Text.Detail>
@@ -51,7 +51,7 @@ export function ProductOperationsDetail({product}:{product:Product}){
     const summary=inventorySummary(row.rows,!error);
     if(col.key==='sku')return row.sku;if(col.key==='total')return summary.available??'Unknown';if(col.key==='reserved')return summary.reserved??'Unknown';if(col.key==='status')return summary.status;
     return inventorySummary(row.rows.filter(entry=>warehouseName(entry.supplyChannel)===col.key),!error).available??'—';
-   }}/></>}
+   }}/></React.Fragment>}
   </Section>
  </Spacings.Stack>;
 }
@@ -85,8 +85,8 @@ export default function ProductOperationsWorkbench({project}:{project:string}){
    <SelectField name="status" title="Inventory Status" value={status} options={['all','In Stock','Low Stock','Out of Stock','Unknown','Digital'].map(value=>({value,label:value==='all'?'All statuses':value}))} onChange={e=>setStatus(String(e.target.value))}/>
    <SelectField name="published" title="Published Status" value={published} options={[{value:'all',label:'All products'},{value:'published',label:'Published'},{value:'draft',label:'Unpublished'}]} onChange={e=>setPublished(String(e.target.value))}/>
   </Spacings.Inline><SecondaryButton label="Refresh products and stock" isDisabled={loading} onClick={()=>setAttempt(n=>n+1)}/><Notice error={error}/>{warning&&<ContentNotification type="warning">{warning}</ContentNotification>}
-  {loading?<><LoadingSpinner/><Text.Detail>Reading live products: {progress}</Text.Detail></>:<><Text.Body>{matches.length} matching products</Text.Body><DataTable<WorkbenchRow> isCondensed rows={matches.slice(page*20,(page+1)*20)} columns={[{key:'name',label:'Product Name'},{key:'image',label:'Product Image'},{key:'key',label:'Product Key'},{key:'catalogs',label:'Catalog Assignment'},{key:'primaryWarehouse',label:'Primary Warehouse'},{key:'available',label:'Available Inventory'},{key:'status',label:'Inventory Status'},{key:'published',label:'Published Status'},{key:'open',label:'Action'}]} itemRenderer={(row,col)=>{
+  {loading?<React.Fragment><LoadingSpinner/><Text.Detail>Reading live products: {progress}</Text.Detail></React.Fragment>:<React.Fragment><Text.Body>{matches.length} matching products</Text.Body><DataTable<WorkbenchRow> isCondensed rows={matches.slice(page*20,(page+1)*20)} columns={[{key:'name',label:'Product Name'},{key:'image',label:'Product Image'},{key:'key',label:'Product Key'},{key:'catalogs',label:'Catalog Assignment'},{key:'primaryWarehouse',label:'Primary Warehouse'},{key:'available',label:'Available Inventory'},{key:'status',label:'Inventory Status'},{key:'published',label:'Published Status'},{key:'open',label:'Action'}]} itemRenderer={(row,col)=>{
    if(col.key==='image')return row.image?<img src={row.image} alt={row.name} style={{width:64,height:64,objectFit:'contain'}}/>:'No image';if(col.key==='catalogs')return row.catalogs?.join(' / ')|| (row.catalogs?'Not assigned':'Not available');if(col.key==='available')return row.digital?'Not applicable':row.summary.available??'Unknown';if(col.key==='status')return row.digital?(row.published?'Active digital product':'Unpublished digital product'):row.summary.status;if(col.key==='published')return row.published?'Published':'Unpublished';if(col.key==='open')return <SecondaryButton label="View operations" onClick={()=>setSelected(products.find(p=>p.id===row.id))}/>;return String(row[col.key as 'name'|'key'|'primaryWarehouse']);
-  }}/><Spacings.Inline><SecondaryButton label="Previous" isDisabled={page===0} onClick={()=>setPage(p=>p-1)}/><Text.Body>Page {page+1}</Text.Body><SecondaryButton label="Next" isDisabled={(page+1)*20>=matches.length} onClick={()=>setPage(p=>p+1)}/></Spacings.Inline></>}
+  }}/><Spacings.Inline><SecondaryButton label="Previous" isDisabled={page===0} onClick={()=>setPage(p=>p-1)}/><Text.Body>Page {page+1}</Text.Body><SecondaryButton label="Next" isDisabled={(page+1)*20>=matches.length} onClick={()=>setPage(p=>p+1)}/></Spacings.Inline></React.Fragment>}
  </Section>;
 }
