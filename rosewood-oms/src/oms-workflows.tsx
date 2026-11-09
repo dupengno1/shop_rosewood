@@ -7,21 +7,23 @@ import PrimaryButton from '@commercetools-uikit/primary-button';
 import SecondaryButton from '@commercetools-uikit/secondary-button';
 import LoadingSpinner from '@commercetools-uikit/loading-spinner';
 import {ContentNotification} from '@commercetools-uikit/notifications';
-import {useCommerceApi} from './api';
+import {useCommerceApi,type Order} from './api';
+import DataTable from '@commercetools-uikit/data-table';
+import {orderConsignments,warehouseName} from './operations-data';
 import {errorMessage,fulfillmentLines} from './domain';
 import {readInventoryRows} from './inventory-data';
 import {readOperation,createOperation,updateOperation,operationStatus,type OperationDocument} from './operation-store';
 import {Notice,Section} from './shared';
 import {OMS_CONTAINER,emptyOmsOperations,validateOmsOperations,createAllocation,cancelAllocation,lineInventoryContext,
   createReturnRequest,prepareReturnReceipt,reconcileReturnReceipt,releaseRejectedReceipt,refundBudget,createRefundRequest,
-  cancelReturnRequest,cancelRefundRequest,returnCapacity,
+  cancelReturnRequest,cancelRefundRequest,returnCapacity,reviewOmsRequest,updateConsignment,consignmentTransitions,type ConsignmentRecord,
   type OmsOrder,type OmsOperations,type OmsInventory} from './oms-domain';
 import {parseOmsMajorAmount,formatOmsMoney} from './oms-money';
 
 type Document=OperationDocument<OmsOperations>;
-type Marker={id:string;collection:'allocations'|'returns'|'refunds';status:string};
+type Marker={id:string;collection:'allocations'|'returns'|'refunds'|'consignments';status:string;approval?:string};
 type Preview={orderVersion:number;documentVersion:number;summary:string;marker:Marker;build?:(order:OmsOrder,data:OmsOperations,inventory?:OmsInventory)=>OmsOperations;inventory?:OmsInventory;receiptId?:string};
-const statuses:Record<string,string>={planned:'计划已保存 · 未占用库存',cancelled:'已取消',requested:'申请已保存 · 待执行',receiving:'实收结果待核对',received:'原生实收已登记',executing:'待执行结果',completed:'已完成申请',rejected:'已拒绝'};
+const statuses:Record<string,string>={planned:'Planned — not reserved',cancelled:'Cancelled',requested:'Requested — awaiting execution',receiving:'Receipt reconciliation required',received:'Receipt recorded',executing:'Execution pending',completed:'Completed',rejected:'Rejected'};
 
 export default function OrderOperations({order:initialOrder,canManage,onReload,onBusyChange}:{order:OmsOrder;canManage:boolean;onReload?:()=>void|Promise<void>;onBusyChange?:(busy:boolean)=>void}){
   const api=useCommerceApi(),lock=useRef(false),storageKey=`rw-oms-operation-attempt:${initialOrder.id}`;
@@ -32,22 +34,23 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
   const [returnKind,setReturnKind]=useState<'return'|'exchange'>('return'),[returnLineId,setReturnLineId]=useState(''),[returnQuantity,setReturnQuantity]=useState(''),[returnReason,setReturnReason]=useState(''),[replacement,setReplacement]=useState('');
   const [refundAmount,setRefundAmount]=useState(''),[refundReason,setRefundReason]=useState('');
   const [cancellationReasons,setCancellationReasons]=useState<Record<string,string>>({});
+  const [statusReasons,setStatusReasons]=useState<Record<string,string>>({}),[nextStatuses,setNextStatuses]=useState<Record<string,ConsignmentRecord['status']>>({}),[approvalReasons,setApprovalReasons]=useState<Record<string,string>>({});
   const data=document?.value||emptyOmsOperations(initialOrder.id);
   const clearPreview=()=>setPreview(undefined);
   const reload=useCallback(async()=>{
     setLoading(true);setError('');setPreview(undefined);
     try{
-      const [fresh,stored]=await Promise.all([api<OmsOrder>(`orders/${initialOrder.id}`),readOperation<OmsOperations>(api,OMS_CONTAINER,initialOrder.id)]);
+      const [fresh,stored]=await Promise.all([api<OmsOrder>(`orders/${initialOrder.id}?expand=lineItems[*].supplyChannel&expand=paymentInfo.payments[*]`),readOperation<OmsOperations>(api,OMS_CONTAINER,initialOrder.id)]);
       if(stored)validateOmsOperations(stored.value,initialOrder.id);
-      if(fresh.id!==initialOrder.id)throw new Error('平台返回的订单不匹配。');
+      if(fresh.id!==initialOrder.id)throw new Error('The returned order does not match the request.');
       setOrder(fresh);setDocument(stored);
       const raw=window.sessionStorage.getItem(storageKey);
       if(raw){
         const marker=JSON.parse(raw) as Marker;
-        const collection=marker.collection==='allocations'||marker.collection==='returns'||marker.collection==='refunds'?marker.collection:undefined;
-        if(collection&&stored?.value[collection].some(item=>item.id===marker.id&&item.status===marker.status)){
-          window.sessionStorage.removeItem(storageKey);setBlocked(false);setMessage('已回读确认上次运营记录，没有重复提交。');
-        }else{setBlocked(true);setError('上次保存结果尚未确认，已暂停新增写入。请刷新核对或联系管理员；不会自动重发。');}
+        const collection=marker.collection==='allocations'||marker.collection==='returns'||marker.collection==='refunds'||marker.collection==='consignments'?marker.collection:undefined;
+        if(collection&&stored?.value[collection]?.some(item=>item.id===marker.id&&item.status===marker.status&&(!marker.approval||('approval' in item&&item.approval?.status===marker.approval)))){
+          window.sessionStorage.removeItem(storageKey);setBlocked(false);setMessage('The previous operation was confirmed. No duplicate was submitted.');
+        }else{setBlocked(true);setError('The previous save is unconfirmed. New writes are paused. Refresh to verify or contact your administrator; there is no automatic retry.');}
       }else setBlocked(false);
     }catch(e){setBlocked(true);setError(errorMessage(e));}finally{setLoading(false);}
   },[api,initialOrder.id,storageKey]);
@@ -68,7 +71,7 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
   let returnRemaining:number|undefined,returnError='';
   if(returnLineId)try{returnRemaining=returnCapacity(order,data,returnLineId);}catch(e){returnError=errorMessage(e);}
   const disabled=!canManage||busy||loading||blocked||Boolean(domainError);
-  const options=physical.map(line=>({value:line.id,label:`${line.name} · ${line.sku||'自定义实物'} · 已登记 ${line.deliveredQuantity} / 未发 ${line.remainingQuantity}`}));
+  const options=physical.map(line=>({value:line.id,label:`${line.name} · ${line.sku||'Custom Physical Item'} · Recorded ${line.deliveredQuantity} / Unshipped ${line.remainingQuantity}`}));
   const context=lineId&&order.lineItems?.some(line=>line.id===lineId)?lineInventoryContext(order,lineId):undefined;
   function showPreview(candidate:Omit<Preview,'orderVersion'|'documentVersion'>){
     if(disabled)return;
@@ -93,9 +96,9 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
   async function save(){
     if(disabled||!preview||lock.current)return;const chosen=preview;lock.current=true;setBusy(true);setError('');setMessage('');
     try{
-      const [fresh,stored]=await Promise.all([api<OmsOrder>(`orders/${initialOrder.id}`),readOperation<OmsOperations>(api,OMS_CONTAINER,initialOrder.id)]);
+      const [fresh,stored]=await Promise.all([api<OmsOrder>(`orders/${initialOrder.id}?expand=lineItems[*].supplyChannel&expand=paymentInfo.payments[*]`),readOperation<OmsOperations>(api,OMS_CONTAINER,initialOrder.id)]);
       const current=stored?validateOmsOperations(stored.value,initialOrder.id):emptyOmsOperations(initialOrder.id);
-      if(fresh.id!==initialOrder.id||fresh.version!==chosen.orderVersion||(stored?.version||0)!==chosen.documentVersion)throw new Error('订单或运营记录已变化，请刷新后重新预览。');
+      if(fresh.id!==initialOrder.id||fresh.version!==chosen.orderVersion||(stored?.version||0)!==chosen.documentVersion)throw new Error('The order or operations record changed. Refresh and review again.');
       if(chosen.receiptId){
         const prepared=prepareReturnReceipt(fresh,current,chosen.receiptId);
         const intent=await persist(prepared.intent,stored,{id:chosen.receiptId,collection:'returns',status:'receiving'});
@@ -113,93 +116,112 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
         }
         setOrder(result);
         await persist(reconcileReturnReceipt(result,intent.value,chosen.receiptId),intent,{id:chosen.receiptId,collection:'returns',status:'received'});
-        setMessage('退货实收已登记到原生 ReturnInfo。未增加库存、未退款、未创建替换订单。');
+        setMessage('Receipt recorded in native ReturnInfo. Stock, funds and replacement orders have not been changed.');
         await onReload?.();
       }else{
         let inventory=chosen.inventory;
         if(inventory){
           const live=await api<OmsInventory>(`inventory/${inventory.id}?expand=supplyChannel`);
-          if(live.id!==inventory.id||live.version!==inventory.version)throw new Error('库存记录已变化，请刷新候选并重新预览。');
+          if(live.id!==inventory.id||live.version!==inventory.version)throw new Error('The inventory record changed. Refresh available entries and review again.');
           inventory=live;
         }
         await persist(chosen.build!(fresh,current,inventory),stored,chosen.marker);setOrder(fresh);
-        setMessage(chosen.marker.status==='cancelled'?'申请或计划已取消并保留记录。未变更原生退货、库存或支付；申请额度已重新计算。':'运营记录已持久保存。分仓计划未预留库存；退换及退款申请均待实际执行。');
+        setMessage(chosen.marker.status==='cancelled'?'The request or plan was cancelled and retained for audit. Native returns, stock and payments are unchanged; capacity has been recalculated.':'Operation saved. Allocation plans do not reserve stock; return, exchange and refund requests await execution.');
         setAllocationQuantity('');setAllocationReason('');setReturnQuantity('');setReturnReason('');setReplacement('');setRefundAmount('');setRefundReason('');
         setCancellationReasons(previous=>{const next={...previous};delete next[chosen.marker.id];return next;});
       }
       setPreview(undefined);
-    }catch(e){setPreview(undefined);setBlocked(true);setError(errorMessage(e)+' 请刷新核对；不会自动重发。');}
+    }catch(e){setPreview(undefined);setBlocked(true);setError(errorMessage(e)+' Refresh to verify; there is no automatic retry.');}
     finally{lock.current=false;setBusy(false);}
   }
   async function reconcile(id:string){
     if(disabled||lock.current)return;lock.current=true;setBusy(true);setError('');setMessage('');
     try{
-      const [fresh,stored]=await Promise.all([api<OmsOrder>(`orders/${initialOrder.id}`),readOperation<OmsOperations>(api,OMS_CONTAINER,initialOrder.id)]);
-      if(!stored)throw new Error('退货意图记录不存在。');
+      const [fresh,stored]=await Promise.all([api<OmsOrder>(`orders/${initialOrder.id}?expand=lineItems[*].supplyChannel&expand=paymentInfo.payments[*]`),readOperation<OmsOperations>(api,OMS_CONTAINER,initialOrder.id)]);
+      if(!stored)throw new Error('The return receipt intent was not found.');
       const next=reconcileReturnReceipt(fresh,validateOmsOperations(stored.value,initialOrder.id),id);
-      await persist(next,stored,{id,collection:'returns',status:'received'});setOrder(fresh);setMessage('已按稳定退货键确认原生实收，未重复登记。');await onReload?.();
+      await persist(next,stored,{id,collection:'returns',status:'received'});setOrder(fresh);setMessage('Native receipt verified using its stable return key. No duplicate was created.');await onReload?.();
     }catch(e){setError(errorMessage(e));}finally{lock.current=false;setBusy(false);}
   }
-  return <Section title="OMS · 分仓、退换与退款申请">
+  const groups=orderConsignments(order as Order);
+  const approvalActions=(collection:'returns'|'refunds',id:string,status:string,approval?:{status:string})=>status==='requested'&&(!approval||approval.status==='pending')?<Spacings.Stack scale="s"><TextField name={`approval-${id}`} title="Approval reason" value={approvalReasons[id]||''} isDisabled={disabled} onChange={event=>{setApprovalReasons(previous=>({...previous,[id]:event.target.value}));clearPreview();}}/><Spacings.Inline>{(['approved','rejected'] as const).map(decision=><SecondaryButton key={decision} label={decision==='approved'?'Review approval':'Review rejection'} isDisabled={disabled} onClick={()=>showPreview({marker:{id,collection,status:collection==='refunds'&&decision==='rejected'?'rejected':'requested',approval:decision},summary:`Record ${decision} decision for this request. This does not execute a refund, restock or create a replacement order.`,build:(fresh,current)=>reviewOmsRequest(fresh,current,collection,id,decision,approvalReasons[id]||'')})}/>)}</Spacings.Inline></Spacings.Stack>:null;
+  return <Section title="OMS · Allocation, Returns & Refund Requests">
     <Notice error={error||domainError} message={message}/>
-    <Spacings.Inline><SecondaryButton label="刷新运营记录 / 核对保存结果" isDisabled={busy||loading} onClick={()=>void reload()}/>{loading&&<LoadingSpinner/>}</Spacings.Inline>
-    <Text.Detail>记录保存在当前项目的 Custom Object，关闭页面后可恢复。版本冲突须重新预览；这里不执行库存预留、回库或支付退款。</Text.Detail>
-    <Section title="分仓计划">
-      <ContentNotification type="info">计划不改变成单时的原仓。已跟踪或预留的行只允许选择原仓；原仓当前可用量低不代表该订单无法履约，因为下单时可能已扣减。已有计划不会随发运自动撤销，请核对后取消已消耗计划。</ContentNotification>
-      <SelectField name="allocation-line" title="实物订单行" value={lineId} options={options.filter(option=>order.lineItems?.some(line=>line.id===option.value))} isDisabled={disabled} onChange={event=>{setLineId(String(event.target.value));clearPreview();}}/>
-      {context&&<Text.Detail>原 Supply Channel：{context.supplyChannelId||'无渠道'} · 原库存模式：{context.inventoryMode}</Text.Detail>}
-      <Notice error={inventoryError}/>
-      {inventoryLoading?<LoadingSpinner/>:<SelectField name="allocation-inventory" title="真实库存记录 / 仓库" value={inventoryId} options={inventories.map(row=>({value:row.id,label:`${row.supplyChannel?.obj?.key||row.supplyChannel?.id||'无 Supply Channel'} · 在库 ${row.quantityOnStock} · 可用 ${row.availableQuantity}`}))} isDisabled={disabled||!inventories.length} onChange={event=>{setInventoryId(String(event.target.value));clearPreview();}}/>}
-      {lineId&&!inventoryLoading&&!inventoryError&&!inventories.length&&<Text.Detail>没有此 SKU 的库存记录；这不等于零库存，不生成推测的仓库。</Text.Detail>}
-      <TextField name="allocation-quantity" title="计划数量（整数）" value={allocationQuantity} isDisabled={disabled} onChange={event=>{setAllocationQuantity(event.target.value);clearPreview();}}/>
-      <TextField name="allocation-reason" title="分仓说明" value={allocationReason} isDisabled={disabled} onChange={event=>{setAllocationReason(event.target.value);clearPreview();}}/>
-      <Spacings.Inline><PrimaryButton label="预览保存分仓计划" isDisabled={disabled||inventoryLoading||!inventoryId} onClick={()=>{
-        const id=crypto.randomUUID(),inventory=inventories.find(row=>row.id===inventoryId),input={id,lineItemId:lineId,quantity:allocationQuantity,reason:allocationReason};
-        if(!inventory)return;showPreview({marker:{id,collection:'allocations',status:'planned'},inventory,summary:`将保存 ${allocationQuantity} 件分仓计划；不预留库存、不改原仓、不登记发运。`,build:(fresh,current,live)=>createAllocation(fresh,current,live!,input)});
-      }}/></Spacings.Inline>
-      {data.allocations.map(item=><Spacings.Stack key={item.id} scale="s"><Text.Body>{item.sku} · {item.quantity} 件 · {item.supplyChannelId||'无渠道'} · {statuses[item.status]}</Text.Body><Text.Detail>{item.reason}</Text.Detail>{item.status==='planned'&&<Spacings.Inline><SecondaryButton label="预览取消此计划" isDisabled={disabled} onClick={()=>showPreview({marker:{id:item.id,collection:'allocations',status:'cancelled'},summary:'仅取消分仓计划记录，不变更库存或已有 Delivery。',build:(_fresh,current)=>cancelAllocation(current,item.id)})}/></Spacings.Inline>}</Spacings.Stack>)}
+    <Spacings.Inline><SecondaryButton label="Refresh Operations / Verify Result" isDisabled={busy||loading} onClick={()=>void reload()}/>{loading&&<LoadingSpinner/>}</Spacings.Inline>
+    <Text.Detail>Records persist in commercetools. Version conflicts require a new review. Stock reservation, restocking and payment refunds are not executed here.</Text.Detail>
+    <Section title="Consignments">
+      <Text.Detail>Groups use the order's saved Supply Channels. Progress below is operator-recorded; it does not send goods, confirm carrier delivery or change payment state.</Text.Detail>
+      {!groups.length&&<Text.Body>No fulfilment groups are recorded on this order.</Text.Body>}
+      {groups.map((group,index)=>{const stored=data.consignments?.find(item=>item.groupId===group.id);const status=stored?.status||'Pending';return <Spacings.Stack scale="m" key={group.id}>
+        <Text.Subheadline as="h4">Consignment {index+1} · {group.warehouse}</Text.Subheadline>
+        <Text.Body>Status: {group.digital?'Digital fulfilment status not recorded':stored?status:'Pending (no progress recorded)'}</Text.Body>
+        <DataTable isCondensed rows={group.lines} columns={[{key:'name',label:'Product'},{key:'sku',label:'SKU'},{key:'quantity',label:'Quantity'}]} itemRenderer={(row,col)=>row[col.key as 'name'|'sku'|'quantity']}/>
+        {stored&&<Text.Detail>Updated {stored.updatedAt} · {stored.reason}</Text.Detail>}
+        {!group.digital&&<><SelectField name={`consignment-status-${group.id}`} title="Next Status" value={consignmentTransitions[status].includes(nextStatuses[group.id])?nextStatuses[group.id]:''} options={consignmentTransitions[status].map(value=>({value,label:value}))} isDisabled={disabled||status==='Delivered'} onChange={event=>{setNextStatuses(previous=>({...previous,[group.id]:String(event.target.value) as ConsignmentRecord['status']}));clearPreview();}}/>
+        <TextField name={`consignment-reason-${group.id}`} title="Status Reason" value={statusReasons[group.id]||''} isDisabled={disabled||status==='Delivered'} onChange={event=>{setStatusReasons(previous=>({...previous,[group.id]:event.target.value}));clearPreview();}}/>
+        <SecondaryButton label="Review Consignment Update" isDisabled={disabled||!consignmentTransitions[status].includes(nextStatuses[group.id])} onClick={()=>{const id=stored?.id||crypto.randomUUID(),nextStatus=nextStatuses[group.id];showPreview({marker:{id,collection:'consignments',status:nextStatus},summary:`Record ${group.warehouse} status as ${nextStatus}. No shipment or financial action is executed.`,build:(fresh,current)=>updateConsignment(fresh,current,{id,groupId:group.id,status:nextStatus,reason:statusReasons[group.id]||''},orderConsignments(fresh as Order).filter(row=>!row.digital).map(row=>row.id))});}}/></>}
+      </Spacings.Stack>;})}
     </Section>
-    <Section title="退货 / 换货申请与实收">
-      <Text.Body>申请数量以已登记发运量为上限，扣除已有原生退货及待执行申请。换货只保存期望 SKU，尚未核对可售条件或创建替换订单。登记实收前请确认货物已实际收到。</Text.Body>
-      <SelectField name="return-kind" title="申请类型" value={returnKind} options={[{value:'return',label:'退货'},{value:'exchange',label:'换货'}]} isDisabled={disabled} onChange={event=>{setReturnKind(event.target.value==='exchange'?'exchange':'return');clearPreview();}}/>
-      <SelectField name="return-line" title="退换实物行" value={returnLineId} options={options} isDisabled={disabled} onChange={event=>{setReturnLineId(String(event.target.value));clearPreview();}}/>
-      <Notice error={returnError}/>
-      {returnRemaining!==undefined&&<Text.Detail>当前可申请退换：{returnRemaining} 件。已扣除原生退货及未取消申请；取消待执行申请后释放其占用数量。</Text.Detail>}
-      <TextField name="return-quantity" title="申请数量（整数）" value={returnQuantity} isDisabled={disabled} onChange={event=>{setReturnQuantity(event.target.value);clearPreview();}}/>
-      <TextField name="return-reason" title="退换原因" value={returnReason} isDisabled={disabled} onChange={event=>{setReturnReason(event.target.value);clearPreview();}}/>
-      {returnKind==='exchange'&&<TextField name="replacement-sku" title="期望替换 SKU（待业务确认）" value={replacement} isDisabled={disabled} onChange={event=>{setReplacement(event.target.value);clearPreview();}}/>}
-      <Spacings.Inline><PrimaryButton label="预览保存退换申请" isDisabled={disabled} onClick={()=>{
-        const id=crypto.randomUUID(),input={id,kind:returnKind,lineItemId:returnLineId,quantity:returnQuantity,reason:returnReason,replacementSku:replacement};
-        showPreview({marker:{id,collection:'returns',status:'requested'},summary:`保存 ${returnQuantity} 件${returnKind==='exchange'?'换货':'退货'}申请，尚未登记实收、回库或退款。`,build:(fresh,current)=>createReturnRequest(fresh,current,input)});
+    <Section title="Inventory Allocation">
+      <Text.Detail>Native order assignment and saved plans are shown separately. Planned quantities are not reservations. An order-specific live reserved balance is not exposed by the native InventoryEntry API.</Text.Detail>
+      <DataTable isCondensed rows={groups.filter(group=>!group.digital).map(group=>({id:group.id,warehouse:group.warehouse,assigned:group.lines.reduce((sum,line)=>sum+line.quantity,0),planned:data.allocations.filter(item=>item.status==='planned'&&(item.supplyChannelId||'unassigned')===group.id).reduce((sum,item)=>sum+item.quantity,0)}))} columns={[{key:'warehouse',label:'Warehouse'},{key:'assigned',label:'Ordered Qty'},{key:'planned',label:'Planned Qty'},{key:'reserved',label:'Reserved Qty'}]} itemRenderer={(row,col)=>col.key==='reserved'?'Not available':row[col.key as 'warehouse'|'assigned'|'planned']}/>
+    </Section>
+    <Section title="Allocation Plans">
+      <ContentNotification type="info">Plans do not change the original fulfilment warehouse. Tracked items remain bound to that warehouse. Low available stock may reflect the order's existing reservation. Review and cancel consumed plans after shipment.</ContentNotification>
+      <SelectField name="allocation-line" title="Physical Order Item" value={lineId} options={options.filter(option=>order.lineItems?.some(line=>line.id===option.value))} isDisabled={disabled} onChange={event=>{setLineId(String(event.target.value));clearPreview();}}/>
+      {context&&<Text.Detail>Original Warehouse: {context.supplyChannelId||'Unassigned'} · Inventory Mode: {context.inventoryMode}</Text.Detail>}
+      <Notice error={inventoryError}/>
+      {inventoryLoading?<LoadingSpinner/>:<SelectField name="allocation-inventory" title="Inventory Entry / Warehouse" value={inventoryId} options={inventories.map(row=>({value:row.id,label:`${warehouseName(row.supplyChannel)} · On-stock ${row.quantityOnStock} · Available ${row.availableQuantity}`}))} isDisabled={disabled||!inventories.length} onChange={event=>{setInventoryId(String(event.target.value));clearPreview();}}/>}
+      {lineId&&!inventoryLoading&&!inventoryError&&!inventories.length&&<Text.Detail>No inventory entry exists for this SKU. This is not a zero-stock observation; no warehouse is inferred.</Text.Detail>}
+      <TextField name="allocation-quantity" title="Planned Quantity" value={allocationQuantity} isDisabled={disabled} onChange={event=>{setAllocationQuantity(event.target.value);clearPreview();}}/>
+      <TextField name="allocation-reason" title="Allocation Reason" value={allocationReason} isDisabled={disabled} onChange={event=>{setAllocationReason(event.target.value);clearPreview();}}/>
+      <Spacings.Inline><PrimaryButton label="Review Allocation Plan" isDisabled={disabled||inventoryLoading||!inventoryId} onClick={()=>{
+        const id=crypto.randomUUID(),inventory=inventories.find(row=>row.id===inventoryId),input={id,lineItemId:lineId,quantity:allocationQuantity,reason:allocationReason};
+        if(!inventory)return;showPreview({marker:{id,collection:'allocations',status:'planned'},inventory,summary:`Save ${allocationQuantity} items in an allocation plan. No stock reservation, warehouse reassignment or shipment is performed.`,build:(fresh,current,live)=>createAllocation(fresh,current,live!,input)});
       }}/></Spacings.Inline>
-      {data.returns.map(item=><Spacings.Stack key={item.id} scale="s"><Text.Body>{item.kind==='exchange'?'换货':'退货'} · {item.quantity} 件 · {physical.find(line=>line.id===item.lineItemId)?.name||item.lineItemId} · {statuses[item.status]}</Text.Body><Text.Detail>{item.reason}{item.replacementSku?` · 期望替换 SKU：${item.replacementSku}（未执行）`:''}</Text.Detail>
-        {item.status==='requested'&&<React.Fragment><Spacings.Inline><SecondaryButton label="预览登记实际收到退货" isDisabled={disabled} onClick={()=>showPreview({marker:{id:item.id,collection:'returns',status:'receiving'},receiptId:item.id,summary:`确认已实际收到 ${item.quantity} 件，将新增原生 Returned 记录。不会回库、退款或创建替换订单。`})}/></Spacings.Inline>
-          <TextField name={`return-cancel-${item.id}`} title="取消此退换申请的原因" value={cancellationReasons[item.id]||''} isDisabled={disabled} onChange={event=>{setCancellationReasons(previous=>({...previous,[item.id]:event.target.value}));clearPreview();}}/>
-          <Spacings.Inline><SecondaryButton label="预览取消退换申请" isDisabled={disabled} onClick={()=>{const reason=cancellationReasons[item.id]||'';showPreview({marker:{id:item.id,collection:'returns',status:'cancelled'},summary:`取消此 ${item.quantity} 件${item.kind==='exchange'?'换货':'退货'}申请并保留记录，释放其申请数量。原因：${reason}。不变更原生退货、库存或支付。`,build:(fresh,current)=>cancelReturnRequest(fresh,current,item.id,reason)});}}/></Spacings.Inline>
+      {data.allocations.map(item=><Spacings.Stack key={item.id} scale="s"><Text.Body>{item.sku} · {item.quantity} items · {groups.find(group=>group.id===(item.supplyChannelId||'unassigned'))?.warehouse||item.supplyChannelId||'Unassigned'} · {statuses[item.status]}</Text.Body><Text.Detail>{item.reason}</Text.Detail>{item.status==='planned'&&<Spacings.Inline><SecondaryButton label="Review Plan Cancellation" isDisabled={disabled} onClick={()=>showPreview({marker:{id:item.id,collection:'allocations',status:'cancelled'},summary:'Cancel only this allocation plan. Stock and existing Deliveries remain unchanged.',build:(_fresh,current)=>cancelAllocation(current,item.id)})}/></Spacings.Inline>}</Spacings.Stack>)}
+    </Section>
+    <Section title="Return / Exchange Requests & Receipts">
+      <Text.Body>Return capacity is recorded shipments less native returns and pending requests. Exchanges store a requested replacement SKU; availability and replacement orders require separate processing. Confirm physical receipt before recording it.</Text.Body>
+      <SelectField name="return-kind" title="Request Type" value={returnKind} options={[{value:'return',label:'Return'},{value:'exchange',label:'Exchange'}]} isDisabled={disabled} onChange={event=>{setReturnKind(event.target.value==='exchange'?'exchange':'return');clearPreview();}}/>
+      <SelectField name="return-line" title="Returned Item / SKU" value={returnLineId} options={options} isDisabled={disabled} onChange={event=>{setReturnLineId(String(event.target.value));clearPreview();}}/>
+      <Notice error={returnError}/>
+      {returnRemaining!==undefined&&<Text.Detail>Remaining Return Capacity: {returnRemaining} items, after native returns and pending requests. Cancelling a pending request releases its capacity.</Text.Detail>}
+      <TextField name="return-quantity" title="Requested Quantity" value={returnQuantity} isDisabled={disabled} onChange={event=>{setReturnQuantity(event.target.value);clearPreview();}}/>
+      <TextField name="return-reason" title="Return / Exchange Reason" value={returnReason} isDisabled={disabled} onChange={event=>{setReturnReason(event.target.value);clearPreview();}}/>
+      {returnKind==='exchange'&&<TextField name="replacement-sku" title="Requested Replacement SKU" value={replacement} isDisabled={disabled} onChange={event=>{setReplacement(event.target.value);clearPreview();}}/>}
+      <Spacings.Inline><PrimaryButton label="Review Return / Exchange Request" isDisabled={disabled} onClick={()=>{
+        const id=crypto.randomUUID(),input={id,kind:returnKind,lineItemId:returnLineId,quantity:returnQuantity,reason:returnReason,replacementSku:replacement};
+        showPreview({marker:{id,collection:'returns',status:'requested'},summary:`Save ${returnQuantity} items ${returnKind==='exchange'?'Exchange':'Return'} request. Receipt, restocking and refund are not executed.`,build:(fresh,current)=>createReturnRequest(fresh,current,input)});
+      }}/></Spacings.Inline>
+      {data.returns.map(item=><Spacings.Stack key={item.id} scale="s"><Text.Body>{item.kind==='exchange'?'Exchange':'Return'} · {item.quantity} items · {physical.find(line=>line.id===item.lineItemId)?.name||item.lineItemId} · {statuses[item.status]}</Text.Body><Text.Detail>Returned SKU: {physical.find(line=>line.id===item.lineItemId)?.sku||'Not recorded'} · Approval Status: {item.approval?.status||'Not recorded'}</Text.Detail>{approvalActions('returns',item.id,item.status,item.approval)}<Text.Detail>{item.reason}{item.replacementSku?` · Requested Replacement SKU: ${item.replacementSku}(not executed)`:''}</Text.Detail>
+        {item.status==='requested'&&<React.Fragment><Spacings.Inline><SecondaryButton label="Review Actual Return Receipt" isDisabled={disabled||item.approval?.status==='rejected'} onClick={()=>showPreview({marker:{id:item.id,collection:'returns',status:'receiving'},receiptId:item.id,summary:`Confirm actual receipt of ${item.quantity} items and record native Returned state. Stock, refunds and replacement orders are not changed.`})}/></Spacings.Inline>
+          <TextField name={`return-cancel-${item.id}`} title="Return / Exchange Cancellation Reason" value={cancellationReasons[item.id]||''} isDisabled={disabled} onChange={event=>{setCancellationReasons(previous=>({...previous,[item.id]:event.target.value}));clearPreview();}}/>
+          <Spacings.Inline><SecondaryButton label="Review Return Cancellation" isDisabled={disabled} onClick={()=>{const reason=cancellationReasons[item.id]||'';showPreview({marker:{id:item.id,collection:'returns',status:'cancelled'},summary:`Cancel ${item.quantity} items ${item.kind==='exchange'?'Exchange':'Return'} request and retain its history, releasing request capacity. Reason: ${reason}. Native returns, stock and payments are unchanged.`,build:(fresh,current)=>cancelReturnRequest(fresh,current,item.id,reason)});}}/></Spacings.Inline>
         </React.Fragment>}
-        {item.status==='receiving'&&<Spacings.Inline><SecondaryButton label="核对原生实收结果（不重发）" isDisabled={disabled} onClick={()=>void reconcile(item.id)}/></Spacings.Inline>}
-        {item.status==='cancelled'&&<Text.Detail>取消时间：{item.cancelledAt||'旧记录未提供'} · 取消原因：{item.cancellationReason||'旧记录未提供'}</Text.Detail>}
+        {item.status==='receiving'&&<Spacings.Inline><SecondaryButton label="Verify Receipt (no resubmission)" isDisabled={disabled} onClick={()=>void reconcile(item.id)}/></Spacings.Inline>}
+        {item.status==='cancelled'&&<Text.Detail>Cancelled At: {item.cancelledAt||'Not recorded'} · Cancellation Reason: {item.cancellationReason||'Not recorded'}</Text.Detail>}
       </Spacings.Stack>)}
     </Section>
-    <Section title="退款申请 · 待支付方执行">
-      <ContentNotification type="warning">仅保存申请，不调用 PSP、不标记退款成功。下方上限只扣除本工作台的待执行和已完成申请，不能作为支付方实际可退余额；执行前须对账。</ContentNotification>
+    <Section title="Refund Requests — Awaiting Payment Execution">
+      <ContentNotification type="warning">This saves a request; it does not call a payment provider or mark funds refunded. The limit accounts for this workbench's requests only. Reconcile the payment provider balance before executing any refund.</ContentNotification>
       <Notice error={budgetError}/>
-      {budget&&<Text.Detail>订单总额 {formatOmsMoney(budget.total,budget.currencyCode,budget.fractionDigits)} · 本工作台可申请上限 {formatOmsMoney(budget.remaining,budget.currencyCode,budget.fractionDigits)}。按主币单位填写，最多 {budget.fractionDigits} 位小数；保存时使用整数最小货币单位。</Text.Detail>}
-      <TextField name="refund-amount" title={`申请金额（${budget?.currencyCode||'订单币种'} 主币单位）`} value={refundAmount} isDisabled={disabled||!budget} onChange={event=>{setRefundAmount(event.target.value);clearPreview();}}/>
-      <TextField name="refund-reason" title="退款原因" value={refundReason} isDisabled={disabled||!budget} onChange={event=>{setRefundReason(event.target.value);clearPreview();}}/>
-      <Spacings.Inline><PrimaryButton label="预览保存退款申请" isDisabled={disabled||!budget} onClick={()=>{
+      {budget&&<Text.Detail>Order Total {formatOmsMoney(budget.total,budget.currencyCode,budget.fractionDigits)} · Remaining Request Limit {formatOmsMoney(budget.remaining,budget.currencyCode,budget.fractionDigits)}. Enter a major-unit amount, with up to {budget.fractionDigits} decimal places. The amount is stored in integer minor units.</Text.Detail>}
+      <TextField name="refund-amount" title={`Requested Amount (${budget?.currencyCode||'Order Currency'} major units)`} value={refundAmount} isDisabled={disabled||!budget} onChange={event=>{setRefundAmount(event.target.value);clearPreview();}}/>
+      <TextField name="refund-reason" title="Refund Reason" value={refundReason} isDisabled={disabled||!budget} onChange={event=>{setRefundReason(event.target.value);clearPreview();}}/>
+      <Spacings.Inline><PrimaryButton label="Review Refund Request" isDisabled={disabled||!budget} onClick={()=>{
         if(!budget)return;try{const amount=parseOmsMajorAmount(refundAmount,budget.fractionDigits),id=crypto.randomUUID(),input={id,amount,currencyCode:budget.currencyCode,reason:refundReason};
-          showPreview({marker:{id,collection:'refunds',status:'requested'},summary:`保存 ${formatOmsMoney(amount,budget.currencyCode,budget.fractionDigits)} 退款申请（整数最小货币单位：${amount} ${budget.currencyCode}），状态为待执行，不执行资金交易。`,build:(fresh,current)=>createRefundRequest(fresh,current,input)});
+          showPreview({marker:{id,collection:'refunds',status:'requested'},summary:`Save ${formatOmsMoney(amount,budget.currencyCode,budget.fractionDigits)} refund request (integer minor units: ${amount} ${budget.currencyCode}), pending execution. No financial transaction is performed.`,build:(fresh,current)=>createRefundRequest(fresh,current,input)});
         }catch(e){setPreview(undefined);setError(errorMessage(e));}
       }}/></Spacings.Inline>
-      {data.refunds.map(item=><Spacings.Stack key={item.id} scale="s"><Text.Body>{budget?formatOmsMoney(item.amount,item.currencyCode,budget.fractionDigits):`${item.amount} ${item.currencyCode} 最小单位（币种精度待核对）`} · {statuses[item.status]} · {item.reason}</Text.Body>
-        <Text.Detail>整数最小货币单位：{item.amount} {item.currencyCode}</Text.Detail>
-        {item.status==='requested'&&<React.Fragment><TextField name={`refund-cancel-${item.id}`} title="取消此退款申请的原因" value={cancellationReasons[item.id]||''} isDisabled={disabled} onChange={event=>{setCancellationReasons(previous=>({...previous,[item.id]:event.target.value}));clearPreview();}}/>
-          <Spacings.Inline><SecondaryButton label="预览取消退款申请" isDisabled={disabled} onClick={()=>{const reason=cancellationReasons[item.id]||'';showPreview({marker:{id:item.id,collection:'refunds',status:'cancelled'},summary:`取消此 ${budget?formatOmsMoney(item.amount,item.currencyCode,budget.fractionDigits):`${item.amount} ${item.currencyCode} 最小单位`} 退款申请并保留记录，释放本工作台申请额度。原因：${reason}。不撤回已执行交易、不调用支付方。`,build:(fresh,current)=>cancelRefundRequest(fresh,current,item.id,reason)});}}/></Spacings.Inline>
+      {data.refunds.map(item=><Spacings.Stack key={item.id} scale="s"><Text.Body>{budget?formatOmsMoney(item.amount,item.currencyCode,budget.fractionDigits):`${item.amount} ${item.currencyCode} minor units (currency precision unverified)`} · {statuses[item.status]} · {item.reason}</Text.Body>
+        <Text.Detail>Integer Minor Units: {item.amount} {item.currencyCode}</Text.Detail><Text.Detail>Request Type: Refund · Approval Status: {item.approval?.status||'Not recorded'}</Text.Detail>{approvalActions('refunds',item.id,item.status,item.approval)}
+        {item.status==='requested'&&<React.Fragment><TextField name={`refund-cancel-${item.id}`} title="Refund Cancellation Reason" value={cancellationReasons[item.id]||''} isDisabled={disabled} onChange={event=>{setCancellationReasons(previous=>({...previous,[item.id]:event.target.value}));clearPreview();}}/>
+          <Spacings.Inline><SecondaryButton label="Review Refund Cancellation" isDisabled={disabled} onClick={()=>{const reason=cancellationReasons[item.id]||'';showPreview({marker:{id:item.id,collection:'refunds',status:'cancelled'},summary:`Cancel ${budget?formatOmsMoney(item.amount,item.currencyCode,budget.fractionDigits):`${item.amount} ${item.currencyCode} minor units`} refund request and retain its history, releasing its request allowance. Reason: ${reason}. Executed transactions are not reversed; no payment provider is called.`,build:(fresh,current)=>cancelRefundRequest(fresh,current,item.id,reason)});}}/></Spacings.Inline>
         </React.Fragment>}
-        {item.status==='cancelled'&&<Text.Detail>取消时间：{item.cancelledAt||'旧记录未提供'} · 取消原因：{item.cancellationReason||'旧记录未提供'}</Text.Detail>}
+        {item.status==='cancelled'&&<Text.Detail>Cancelled At: {item.cancelledAt||'Not recorded'} · Cancellation Reason: {item.cancellationReason||'Not recorded'}</Text.Detail>}
       </Spacings.Stack>)}
     </Section>
-    {preview&&<Section title="确认本次操作"><ContentNotification type="warning">{preview.summary}</ContentNotification><Text.Detail>订单版本 {preview.orderVersion} · 运营记录版本 {preview.documentVersion} · 请求 {preview.marker.id}</Text.Detail><Spacings.Inline><PrimaryButton label={busy?'正在保存…':'确认保存'} isDisabled={disabled} onClick={()=>void save()}/><SecondaryButton label="取消预览" isDisabled={busy} onClick={clearPreview}/></Spacings.Inline></Section>}
+    {preview&&<Section title="Confirm Operation"><ContentNotification type="warning">{preview.summary}</ContentNotification><Text.Detail>Order Version {preview.orderVersion} · Operations Version {preview.documentVersion} · Request {preview.marker.id}</Text.Detail><Spacings.Inline><PrimaryButton label={busy?'Saving…':'Confirm Save'} isDisabled={disabled} onClick={()=>void save()}/><SecondaryButton label="Cancel Review" isDisabled={busy} onClick={clearPreview}/></Spacings.Inline></Section>}
   </Section>;
 }

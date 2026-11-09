@@ -30,7 +30,7 @@ test('CustomObject path/key validation occurs before requests, and missing read 
   assert.equal(calls, 0);
   assert.equal(await readOperation(client, container, key), undefined);
   assert.equal(calls, 1);
-  await assert.rejects(readOperation(api(() => ({...doc(), key: doc(2).key})), container, key), /不符/);
+  await assert.rejects(readOperation(api(() => ({...doc(), key: doc(2).key})), container, key), /does not match/);
 });
 test('CustomObject list uses stable server time/key cursor, twenty rows, and no local UUID sorting', async () => {
   const documents = Array.from({length: 20}, (_, index) => doc(index + 1)).reverse();
@@ -46,7 +46,7 @@ test('CustomObject list uses stable server time/key cursor, twenty rows, and no 
   await listOperations(api(path => {paths.push(path); return {results: []};}), container, result.nextCursor);
   const where = new URL(paths[1], 'https://example.invalid/').searchParams.get('where')!;
   assert.ok(where.includes(`createdAt < "${stamp}"`)); assert.ok(where.includes(`key > "${documents.at(-1)!.key}"`));
-  await assert.rejects(listOperations(api(() => ({results: [doc(), doc()]})), container), /重复/);
+  await assert.rejects(listOperations(api(() => ({results: [doc(), doc()]})), container), /duplicate/);
 });
 test('WMS predicates apply before pagination and keep cursor OR grouped under every filter', async () => {
   const documents = Array.from({length: 20}, (_, index) => ({...doc(index + 1), value: {type: 'transfer', status: 'planned', sku: 'QA-SKU', reference: 'QA-REF'}}));
@@ -58,7 +58,7 @@ test('WMS predicates apply before pagination and keep cursor OR grouped under ev
   const selection = 'value(type = "transfer") and value(sku = "QA-SKU") and value(status = "planned") and value(reference = "QA-REF")';
   assert.equal(where[0], selection);
   assert.equal(where[1], `${selection} and (createdAt < "${stamp}" or (createdAt = "${stamp}" and key > "${documents.at(-1)!.key}"))`);
-  await assert.rejects(listOperations(api(() => ({results: [{...doc(), value: {type: 'count'}}]})), container, undefined, filters), /不符合当前筛选/);
+  await assert.rejects(listOperations(api(() => ({results: [{...doc(), value: {type: 'count'}}]})), container, undefined, filters), /does not match the selected filters/);
 });
 test('WMS query strings remain exact literals and invalid selectors never reach the API', async () => {
   let calls = 0;
@@ -72,6 +72,6 @@ test('WMS query strings remain exact literals and invalid selectors never reach 
   for (const filters of [{sku: 'bad\nvalue'}, {reference: 'x'.repeat(121)}, {status: 'injected'}, {type: 'other'}, {container: 'foreign'}]) {
     await assert.rejects(listOperations(client, container, undefined, filters as never));
   }
-  await assert.rejects(listOperations(client, 'rw-mc-pim-reports', undefined, {type: 'count'}), /不支持/);
+  await assert.rejects(listOperations(client, 'rw-mc-pim-reports', undefined, {type: 'count'}), /not supported/);
   assert.equal(calls, 1);
 });
