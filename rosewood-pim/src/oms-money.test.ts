@@ -15,12 +15,12 @@ test('OMS major-unit input preserves exact minor units for zero, two and three f
 
 test('OMS amount input rejects rounding, grouping, exponents, non-positive values and unsafe integer overflow',()=>{
   for(const input of ['','0','0.00','-1','+1','1e2','1,000.00','.50','1.','1.234','0.000','１.００','1\n','1 00','90071992547409.92'])assert.throws(()=>parseOmsMajorAmount(input,2),{name:'Error'},input);
-  assert.throws(()=>parseOmsMajorAmount('1.0',0),/0 位小数/);
-  assert.throws(()=>parseOmsMajorAmount('1.0001',3),/3 位小数/);
+  assert.throws(()=>parseOmsMajorAmount('1.0',0),/0 decimal places/);
+  assert.throws(()=>parseOmsMajorAmount('1.0001',3),/3 decimal places/);
   assert.equal(parseOmsMajorAmount('90071992547409.91',2),Number.MAX_SAFE_INTEGER);
   assert.equal(formatOmsMajorAmount(Number.MAX_SAFE_INTEGER,2),'90071992547409.91');
   assert.equal(parseOmsMajorAmount(String(Number.MAX_SAFE_INTEGER),0),Number.MAX_SAFE_INTEGER);
-  for(const precision of [-1,1.5,7,NaN])assert.throws(()=>parseOmsMajorAmount('1',precision),/精度/);
-  for(const amount of [-1,0.1,Infinity,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>formatOmsMajorAmount(amount,2),/整数/);
-  assert.throws(()=>formatOmsMoney(1,'usd',2),/币种/);
+  for(const precision of [-1,1.5,7,NaN])assert.throws(()=>parseOmsMajorAmount('1',precision),/precision/);
+  for(const amount of [-1,0.1,Infinity,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>formatOmsMajorAmount(amount,2),/integer/);
+  assert.throws(()=>formatOmsMoney(1,'usd',2),/currency/);
 });

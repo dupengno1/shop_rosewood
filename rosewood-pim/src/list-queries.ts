@@ -1,7 +1,8 @@
-import type {Product, Inventory} from './api';
+import type {Product, Inventory,Order} from './api';
+import {sourceStore,orderConsignments,orderDeliveryMethods} from './operations-data';
 import {productQuality, localized as localize} from './domain';
 
-const localized = (value?: Record<string, string>) => localize(value, 'zh-CN') || '—';
+const localized = (value?: Record<string, string>) => localize(value, 'en') || '—';
 
 export type ApplicationModule = 'oms' | 'wms' | 'pim';
 export const PAGE_SIZE = 20;
@@ -11,9 +12,9 @@ export const QUERY_LIMIT = PAGE_SIZE + 1;
 export const MAX_OFFSET = 10000;
 export const MAX_PAGE = Math.floor(MAX_OFFSET / PAGE_SIZE);
 export const WORK_QUEUES = {
-  oms: [{value:'all',label:'全部订单'},{value:'active',label:'进行中订单'},{value:'unshipped',label:'平台未标记已发运'},{value:'cancelled',label:'已取消'}],
-  pim: [{value:'all',label:'全部商品'},{value:'draft',label:'未发布商品'},{value:'changed',label:'有待发布修改'},{value:'published',label:'已发布商品'}],
-  wms: [{value:'all',label:'全部库存'},{value:'low',label:'低可用库存（≤ 5）'},{value:'empty',label:'无可用库存（≤ 0）'},{value:'negative',label:'在库量为负'}],
+  oms: [{value:'all',label:'All Orders'},{value:'active',label:'Active Orders'},{value:'unshipped',label:'Not marked as shipped'},{value:'cancelled',label:'Cancelled'}],
+  pim: [{value:'all',label:'All Products'},{value:'draft',label:'Unpublished Products'},{value:'changed',label:'Staged changes'},{value:'published',label:'Published Products'}],
+  wms: [{value:'all',label:'All Inventory'},{value:'low',label:'Low Stock (≤ 5)'},{value:'empty',label:'Out of Stock (≤ 0)'},{value:'negative',label:'Negative On-stock'}],
 };
 export function workQueue(module:ApplicationModule,value?:string|null):string {
   return WORK_QUEUES[module].some(option=>option.value===value)?value!:'all';
@@ -27,7 +28,7 @@ export function isResourceId(value: string): boolean { return uuid.test(value); 
 
 export function normalizeSearch(value: string): string {
   const search = value.trim();
-  if (search.length > 256 || /[\u0000-\u001f\u007f]/.test(search)) throw new Error('搜索值须为不超过 256 字符的单行文本。');
+  if (search.length > 256 || /[\u0000-\u001f\u007f]/.test(search)) throw new Error('Search must be a single line of no more than 256 characters.');
   return search;
 }
 export function pageFromQuery(value: string | null): number {
@@ -61,7 +62,7 @@ export function listHashState(location: ApplicationLocationState,module?:Applica
   if (current.get('q')) next.set('q', current.get('q')!);
   if (current.get('filter')) next.set('filter', current.get('filter')!);
   const view=current.get('view');
-  if(view&&((view==='quality'&&module!=='wms'&&module!=='oms')||(['transfer','count'].includes(view)&&module!=='pim'&&module!=='oms')))next.set('view',view);
+  if(view&&((view==='quality'&&module!=='wms'&&module!=='oms')||(['transfer','count','products'].includes(view)&&module!=='pim'&&module!=='oms')))next.set('view',view);
   if(module==='pim'||!module&&view==='quality'){
     const quality=qualityViewState(location);
     if(quality.report)next.set('report',quality.report);
@@ -76,7 +77,7 @@ export function listHashState(location: ApplicationLocationState,module?:Applica
   return next;
 }
 
-export function wmsViewHashState(location:ApplicationLocationState,view:'inventory'|'transfer'|'count'):URLSearchParams{
+export function wmsViewHashState(location:ApplicationLocationState,view:'inventory'|'transfer'|'count'|'products'):URLSearchParams{
   const next=listHashState(location,'wms');
   if(view==='inventory')next.delete('view');else next.set('view',view);
   // Document types and their status filters cannot carry across workflow tabs.
@@ -96,7 +97,7 @@ function skuPredicate(sku: string): string {
 }
 
 export function buildListQuery(module: ApplicationModule, search: string, page: number, filter?:string): string {
-  if (!Number.isSafeInteger(page) || page < 0 || page > MAX_PAGE) throw new Error('页码超出支持范围，请收窄搜索后重试。');
+  if (!Number.isSafeInteger(page) || page < 0 || page > MAX_PAGE) throw new Error('The requested page is out of range. Narrow the search and retry.');
   const term = normalizeSearch(search);
   const query = new URLSearchParams({ limit: String(QUERY_LIMIT), offset: String(page * PAGE_SIZE), withTotal: 'false' });
   query.append('sort', 'createdAt desc');
@@ -104,6 +105,7 @@ export function buildListQuery(module: ApplicationModule, search: string, page: 
   let resource: string;
   if (module === 'oms') {
     resource = 'orders';
+    query.append('expand','lineItems[*].supplyChannel');
     if (term) query.set('where', `orderNumber=${JSON.stringify(term)}${uuid.test(term) ? ` or id=${JSON.stringify(term)}` : ''}`);
   } else if (module === 'pim') {
     resource = 'products';
@@ -125,13 +127,14 @@ export function buildListQuery(module: ApplicationModule, search: string, page: 
 
 export function skuProductQuery(sku: string): string {
   const term = normalizeSearch(sku);
-  if (!term) throw new Error('SKU 不能为空。');
+  if (!term) throw new Error('Enter a SKU.');
   return `products?${new URLSearchParams({ where: skuPredicate(term), limit: '2', withTotal: 'false' })}`;
 }
 
 export type OrderListRow = {
   id: string; orderNumber?: string; createdAt?: string; orderState?: string; paymentState?: string; shipmentState?: string;
   totalPrice?: { centAmount: number; currencyCode: string; fractionDigits?: number };
+  sourceStore?:string;customerType?:string;warehouses?:string;deliveryMethods?:string;
 };
 export type ProductListRow = {
   id: string; version?:number; key?: string; name: string; published: boolean; hasStagedChanges: boolean;
@@ -143,6 +146,9 @@ export type ProductListRow = {
 export function orderListRow(order: OrderListRow): OrderListRow {
   return { id: order.id, orderNumber: order.orderNumber, createdAt: order.createdAt,
     orderState: order.orderState, paymentState: order.paymentState, shipmentState: order.shipmentState,
+    sourceStore:sourceStore(order as Order),customerType:(order as Order).customerId?'Registered':'Guest',
+    warehouses:orderConsignments(order as Order).map(group=>group.warehouse).join(' / ')||'Not recorded',
+    deliveryMethods:orderDeliveryMethods(order as Order).join(' / ')||'Not recorded',
     ...(order.totalPrice && { totalPrice: { centAmount: order.totalPrice.centAmount, currencyCode: order.totalPrice.currencyCode,
       fractionDigits: order.totalPrice.fractionDigits } }) };
 }
@@ -164,9 +170,9 @@ export function inventoryListRow(entry: Inventory): Inventory {
 }
 
 export function nativeEntityUrl(project: string, kind: 'orders' | 'products', id: string, origin: string, variantId?: number): string {
-  if (!project || !uuid.test(id)) throw new Error('原生资源标识无效。');
+  if (!project || !uuid.test(id)) throw new Error('Invalid native resource identifier.');
   const path = `/${encodeURIComponent(project)}/${kind}/${id}`;
-  if (variantId !== undefined && (!Number.isSafeInteger(variantId) || variantId < 1 || kind !== 'products')) throw new Error('原生变体标识无效。');
+  if (variantId !== undefined && (!Number.isSafeInteger(variantId) || variantId < 1 || kind !== 'products')) throw new Error('Invalid native variant identifier.');
   return new URL(path + (variantId === undefined ? '' : `/variants/${variantId}/inventory`), origin).href;
 }
 
@@ -179,7 +185,7 @@ export function verifiedInventoryLinks(products: Product[], sku: string, project
       for (const variant of [data.masterVariant, ...(data.variants || [])].filter(Boolean)) {
         if (variant.sku !== sku || !Number.isSafeInteger(variant.id) || variant.id < 1 || !uuid.test(product.id)) continue;
         const id = `${product.id}/${variant.id}`;
-        links.set(id, { id, label: `打开原生库存列表 · ${localized(data.name)} · Variant ${variant.id}`,
+        links.set(id, { id, label: `Open native inventory · ${localized(data.name)} · Variant ${variant.id}`,
           url: nativeEntityUrl(project, 'products', product.id, origin, variant.id) });
       }
     }

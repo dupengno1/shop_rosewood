@@ -11,6 +11,7 @@ export function validateCommerceRequest(path:string,payload?:unknown):void {
   if(decoded.split('/').some(part=>part==='.'||part==='..')||decoded.includes('\\'))throw new Error('Invalid commerce path.');
   if(/^(products|orders|inventory)(\/|$)/.test(pathname))return;
   if(/^channels(\/|$)/.test(pathname)&&payload===undefined)return;
+  if(/^product-selections(\/|$)/.test(pathname)&&payload===undefined)return;
   if(pathname==='custom-objects'&&payload&&typeof payload==='object'){
     const body=payload as Record<string,unknown>;
     if(typeof body.container==='string'&&containers.has(body.container)&&typeof body.key==='string'&&uuid.test(body.key)&&Number.isSafeInteger(body.version)&&Number(body.version)>=0&&body.value!==undefined)return;

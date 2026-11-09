@@ -272,7 +272,7 @@ export function buildDeliveryAction(
     if (!line) throw new Error('A selected line no longer exists in this order. Reload before saving.');
     const quantity = value === '' ? 0 : nonNegativeInteger(value, 'Delivery quantity');
     if (quantity > 0 && line.classification.type !== 'physical') {
-      throw new Error(`${line.name}：${line.classification.label}，不能登记实物发运。请先核对订单行履约类型。`);
+      throw new Error(`${line.name}: ${line.classification.label}. Physical dispatch is not allowed. Verify the order item fulfilment type first.`);
     }
     if (quantity > line.remainingQuantity) throw new Error(`Delivery quantity for ${line.name} exceeds the remaining ${line.remainingQuantity}.`);
     if (quantity > 0) items.push({ id, quantity });
