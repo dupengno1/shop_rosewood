@@ -36,20 +36,26 @@ export function ProductOperationsDetail({product}:{product:Product}){
  const data=productOperationalData(product,rows,!loading&&!error),channels=[...new Set(rows.map(row=>warehouseName(row.supplyChannel)))];
  const variants=data.variants.map(variant=>({id:String(variant.id),sku:variant.sku||'No SKU',rows:rows.filter(row=>row.sku===variant.sku)}));
  return <Spacings.Stack scale="l">
-  <Section title="Store & Fulfilment Information">
+  <Section title="Fulfilment Information">
+   <Spacings.Stack scale="xs"><Text.Detail tone="secondary">Primary Fulfilment Warehouse</Text.Detail><Text.Subheadline as="h4">{data.primaryWarehouse}</Text.Subheadline></Spacings.Stack>
+   <Text.Body>Fulfilment Strategy: {data.strategy} · Fallback Warehouse: {data.fallbackWarehouse}</Text.Body>
+   {data.primaryWarehouseMismatch&&<ContentNotification type="warning">The native Primary Fulfilment Warehouse attribute shows {data.nativePrimaryWarehouse}, but storefront allocation uses {data.primaryWarehouse}. Align the native attribute before relying on it.</ContentNotification>}
+   <Text.Detail>Orders reserve and ship physical items from this warehouse. Digital products are delivered by email and hold no physical stock.</Text.Detail>
+  </Section>
+  <Section title="Store Information">
    <Text.Body>Catalog Assignment: {catalogs?catalogs.join(' / ')||'Not assigned':'Not available'}</Text.Body>
    {catalogError&&<ContentNotification type="warning">Catalog assignments are unavailable. Product Selection read access is required. {catalogError}</ContentNotification>}
-   <Text.Body>Primary Fulfilment Warehouse: {data.primaryWarehouse}</Text.Body><Text.Body>Fulfilment Strategy: {data.strategy}</Text.Body><Text.Body>Fallback Warehouse: {data.fallbackWarehouse}</Text.Body>
   </Section>
   <Section title="Inventory Summary">
    <SecondaryButton label="Refresh operational information" isDisabled={loading} onClick={()=>setAttempt(n=>n+1)}/><Notice error={error}/>
-   {loading?<LoadingSpinner/>:data.digital?<Text.Body>Digital Delivery — physical inventory does not apply. Availability depends on the product's published status and selling configuration.</Text.Body>:<React.Fragment>
+   {loading?<LoadingSpinner/>:data.digital?<React.Fragment><Text.Body>Digital Delivery — physical inventory does not apply. Availability depends on the product's published status and selling configuration.</Text.Body>
+   <DataTable isCondensed rows={variants} columns={[{key:'sku',label:'SKU'},{key:'fulfilment',label:'Fulfilment Warehouse'}]} itemRenderer={(row,col)=>col.key==='sku'?row.sku:data.primaryWarehouse}/></React.Fragment>:<React.Fragment>
    <DataTable isCondensed rows={channels.map(channel=>({id:channel,channel,...inventorySummary(rows.filter(row=>warehouseName(row.supplyChannel)===channel),!error)}))} columns={[{key:'channel',label:'Warehouse'},{key:'available',label:'Available'},{key:'reserved',label:'Reserved Inventory'}]} itemRenderer={(row,col)=>row[col.key as keyof typeof row]??'Unknown'}/>
    <Text.Body>Total Available Inventory: {data.summary.available??'Unknown'} · Inventory Status: {data.summary.status}</Text.Body>
    <Text.Detail>Reserved Inventory is the observed quantityOnStock minus availableQuantity for each SKU and supply channel. Order and reservation updates may take up to 10 seconds to appear. This aggregate is not the quantity reserved by a particular order. Missing or inconsistent inventory records remain Unknown.</Text.Detail>
-   <DataTable isCondensed rows={variants} columns={[{key:'sku',label:'SKU'},...['Asia Warehouse','EMEA Warehouse','Americas Warehouse','Hong Kong Warehouse'].map(name=>({key:name,label:name.replace(' Warehouse','')})),{key:'total',label:'Total Available'},{key:'reserved',label:'Reserved Inventory'},{key:'status',label:'Inventory Status'}]} itemRenderer={(row,col)=>{
+   <DataTable isCondensed rows={variants} columns={[{key:'sku',label:'SKU'},{key:'fulfilment',label:'Fulfilment Warehouse'},...['Asia Warehouse','EMEA Warehouse','Americas Warehouse','Hong Kong Warehouse'].map(name=>({key:name,label:name.replace(' Warehouse','')})),{key:'total',label:'Total Available'},{key:'reserved',label:'Reserved Inventory'},{key:'status',label:'Inventory Status'}]} itemRenderer={(row,col)=>{
     const summary=inventorySummary(row.rows,!error);
-    if(col.key==='sku')return row.sku;if(col.key==='total')return summary.available??'Unknown';if(col.key==='reserved')return summary.reserved??'Unknown';if(col.key==='status')return summary.status;
+    if(col.key==='sku')return row.sku;if(col.key==='fulfilment')return data.primaryWarehouse;if(col.key==='total')return summary.available??'Unknown';if(col.key==='reserved')return summary.reserved??'Unknown';if(col.key==='status')return summary.status;
     return inventorySummary(row.rows.filter(entry=>warehouseName(entry.supplyChannel)===col.key),!error).available??'—';
    }}/></React.Fragment>}
   </Section>
@@ -92,7 +98,7 @@ export default function ProductOperationsWorkbench({project}:{project:string}){
     {key:'image',label:'Product Image',width:'144px'},
     {key:'key',label:'Product Key',width:'160px'},
     {key:'catalogs',label:'Catalog Assignment',width:'180px'},
-    {key:'primaryWarehouse',label:'Primary Warehouse',width:'190px'},
+    {key:'primaryWarehouse',label:'Primary Fulfilment Warehouse',width:'210px'},
     {key:'available',label:'Available Inventory',width:'180px'},
     {key:'status',label:'Inventory Status',width:'164px'},
     {key:'published',label:'Published Status',width:'160px'},
