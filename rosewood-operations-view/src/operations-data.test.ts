@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {Order,Inventory,Product} from './api';
-import {inventorySummary,warehouseName,orderConsignments,sourceStore,productOperationalData,orderPaymentMethods,orderDeliveryMethods,isSimulatedPaymentSelection} from './operations-data';
+import {inventorySummary,warehouseName,orderConsignments,sourceStore,productOperationalData,orderPaymentMethods,orderDeliveryMethods,isSimulatedPaymentSelection,lineFulfilmentWarehouse,DIGITAL_DELIVERY,PRIMARY_WAREHOUSE_ATTRIBUTE} from './operations-data';
 const entry=(stock:number,available:number,key='rw-warehouse-asia'):Inventory=>({id:key,version:1,sku:'SKU',quantityOnStock:stock,availableQuantity:available,supplyChannel:{id:key,obj:{key}}});
 test('warehouse inventory distinguishes absent and incomplete observations from zero and negative availability',()=>{
  assert.equal(inventorySummary([]).status,'Unknown');assert.equal(inventorySummary([entry(10,5)],false).available,null);
@@ -53,3 +53,25 @@ test('recorded delivery methods take precedence and incomplete or mixed orders n
  assert.deepEqual(orderDeliveryMethods({...order,lineItems:[{...digital,custom:{type:{id:'type'},fields:{rwFulfillmentType:{key:'digital',label:'Digital'}}}}]}),[]);
  assert.deepEqual(orderDeliveryMethods({...order,customLineItems:[{id:'unknown-custom',name:{en:'Unclassified'},quantity:1}]}),[]);
 });
+
+test('fulfilment warehouse labels the configured primary, native mirror, digital delivery and each order item consistently',()=>{
+ const info=(value:Record<string,unknown>)=>[{name:'rwProductInfo',value:JSON.stringify(value)}];
+ const data=(attributes:{name:string;value:unknown}[],productAttributes?:{name:string;value:unknown}[])=>({name:{en:'QA'},masterVariant:{id:1,sku:'SKU',attributes},variants:[{id:2,sku:'SKU-2'}],...(productAttributes&&{attributes:productAttributes})});
+ const product=(staged:ReturnType<typeof data>):Product=>({id:'p',key:'p',version:1,masterData:{current:staged,staged,published:true,hasStagedChanges:false}});
+ for(const [key,label] of [['warehouse-asia','Asia Warehouse'],['warehouse-eu','EMEA Warehouse'],['warehouse-us','Americas Warehouse'],['warehouse-hk','Hong Kong Warehouse']]){
+  const row=productOperationalData(product(data(info({kind:'physical',fulfillment:{primaryWarehouse:key,strategy:'primary-only',fallbackWarehouse:null}}),[{name:PRIMARY_WAREHOUSE_ATTRIBUTE,value:{key,label}}])),[]);
+  assert.equal(row.primaryWarehouse,label);assert.equal(row.nativePrimaryWarehouse,label);assert.equal(row.primaryWarehouseMismatch,false);assert.equal(row.strategy,'Primary warehouse only');assert.equal(row.fallbackWarehouse,'Not configured');
+ }
+ const digital=productOperationalData(product(data(info({kind:'digital',fulfillment:{primaryWarehouse:null,strategy:'digital'}}))),[]);
+ assert.deepEqual([digital.primaryWarehouse,digital.strategy,digital.fallbackWarehouse,digital.nativePrimaryWarehouse],[DIGITAL_DELIVERY,'Digital delivery','Not applicable',null]);
+ const drift=productOperationalData(product(data(info({kind:'physical',fulfillment:{primaryWarehouse:'warehouse-eu'}}),[{name:PRIMARY_WAREHOUSE_ATTRIBUTE,value:{key:'warehouse-us',label:'Americas Warehouse'}}])),[]);
+ assert.equal(drift.primaryWarehouse,'EMEA Warehouse','storefront allocation config stays authoritative');assert.equal(drift.primaryWarehouseMismatch,true);
+ assert.equal(productOperationalData(product(data([])),[]).primaryWarehouse,'Not configured');
+ const snapshot=info({kind:'physical',fulfillment:{primaryWarehouse:'warehouse-us'}});
+ assert.equal(lineFulfilmentWarehouse({supplyChannel:{id:'c',obj:{key:'rw-warehouse-hk'}},variant:{attributes:snapshot}},false),'Hong Kong Warehouse');
+ assert.equal(lineFulfilmentWarehouse({variant:{attributes:snapshot}},false),'Americas Warehouse (configured; not allocated)');
+ assert.equal(lineFulfilmentWarehouse({},false),'Unassigned warehouse');assert.equal(lineFulfilmentWarehouse({supplyChannel:{id:'c'}},true),DIGITAL_DELIVERY);
+ const order:Order={id:'O',version:1,lineItems:[{id:'robe',name:{en:'RW Robe'},quantity:1,supplyChannel:{id:'us',obj:{key:'rw-warehouse-us'}},variant:{sku:'R',attributes:snapshot}},{id:'card',name:{en:'E-Gift Card'},quantity:1,variant:{sku:'G',attributes:info({kind:'digital'})}}],customLineItems:[]};
+ assert.deepEqual(orderConsignments(order).map(group=>[group.warehouse,group.lines.map(line=>line.fulfilmentWarehouse)]),[['Americas Warehouse',['Americas Warehouse']],[DIGITAL_DELIVERY,[DIGITAL_DELIVERY]]]);
+});
+

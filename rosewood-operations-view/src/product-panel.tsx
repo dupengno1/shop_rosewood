@@ -11,6 +11,7 @@ import {productQuality,errorMessage} from './domain';
 import {Notice,Section,NativeLink} from './shared';
 import InventoryPanel from './inventory-panel';
 import {ProductOperationsDetail} from './product-operations';
+import {configuredPrimaryWarehouse} from './fulfilment-warehouse';
 
 export default function ProductPanel({id,variantId,nativeUrl,canManage,mode='all'}:{id:string;variantId?:number;nativeUrl:string;canManage:boolean;mode?:'all'|'pim'}) {
   const api=useCommerceApi();
@@ -61,6 +62,7 @@ export default function ProductPanel({id,variantId,nativeUrl,canManage,mode='all
     {mode==='all'&&<Section title="WMS · SKU Warehouse Inventory">
       <Text.Body>View Supply Channel inventory and correct on-stock quantities. Receiving, bins, batches and picking remain warehouse operations.</Text.Body>
       <SelectField title="Current Variant" name="variant" value={String(current?.id || '')} options={variants.map(v=>({value:String(v.id),label:v.sku || `Variant ${v.id} · No SKU`}))} onChange={event=>setSelected(typeof event.target.value==='string'?event.target.value:'')}/>
+      <Text.Body>Fulfilment Warehouse: {configuredPrimaryWarehouse(staged.masterVariant.attributes).label}</Text.Body>
       {current?.sku ? <InventoryPanel key={current.sku} sku={current.sku} canManage={canManage}/> : <ContentNotification type="warning">This variant has no SKU; inventory cannot be queried.</ContentNotification>}
     </Section>}
   </Spacings.Stack>;

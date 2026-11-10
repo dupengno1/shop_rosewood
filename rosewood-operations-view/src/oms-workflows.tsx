@@ -162,8 +162,9 @@ export default function OrderOperations({order:initialOrder,canManage,onReload,o
       {!groups.length&&<Text.Body>No fulfilment groups are recorded on this order.</Text.Body>}
       {groups.map((group,index)=>{const stored=data.consignments?.find(item=>item.groupId===group.id);const status=stored?.status||'Pending';return <Spacings.Stack scale="m" key={group.id}>
         <Text.Subheadline as="h4">Consignment {index+1} · {group.warehouse}</Text.Subheadline>
+        <Text.Body>Fulfilment Warehouse: {group.warehouse}</Text.Body>
         <Text.Body>Status: {group.digital?(digitalRecord?`${digitalRecord.status} (${digitalRecord.mode==='simulation'?'simulated record':'manually recorded'})`:'Digital fulfilment status not recorded'):stored?status:'Pending (no progress recorded)'}</Text.Body>
-        <DataTable isCondensed rows={group.lines} columns={[{key:'name',label:'Product'},{key:'sku',label:'SKU'},{key:'quantity',label:'Quantity'}]} itemRenderer={(row,col)=>row[col.key as 'name'|'sku'|'quantity']}/>
+        <DataTable isCondensed rows={group.lines} columns={[{key:'name',label:'Product'},{key:'sku',label:'SKU'},{key:'fulfilmentWarehouse',label:'Fulfilment Warehouse'},{key:'quantity',label:'Quantity'}]} itemRenderer={(row,col)=>row[col.key as 'name'|'sku'|'fulfilmentWarehouse'|'quantity']}/>
         {stored&&<Text.Detail>Updated {stored.updatedAt} · {stored.reason}</Text.Detail>}
         {group.digital&&<>
           <ContentNotification type="info">Record an operator-reported or simulated digital fulfilment status. This does not send an email or gift card, call a delivery provider, or change payment or native shipment state. Completed is a recorded statement, not provider-confirmed delivery.</ContentNotification>

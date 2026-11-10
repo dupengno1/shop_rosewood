@@ -42,14 +42,15 @@ function load(file:string,source?:string,api:unknown=()=>{throw new Error('Rende
 const render=(component:React.ComponentType<any>,props:Record<string,unknown>)=>renderToStaticMarkup(
  React.createElement(IntlProvider,{locale:'en',messages:{}},React.createElement(component,props))
 );
-const productData={name:{en:'QA product'},masterVariant:{id:1,sku:'QA-SKU'},variants:[]};
+const productData={name:{en:'QA product'},masterVariant:{id:1,sku:'QA-SKU',attributes:[{name:'rwProductInfo',value:JSON.stringify({kind:'physical',fulfillment:{primaryWarehouse:'warehouse-asia',strategy:'primary-only',fallbackWarehouse:null}})}]},variants:[]};
 const product:Product={id:'QA-PRODUCT',key:'QA',version:1,masterData:{current:productData,staged:productData,published:true,hasStagedChanges:false}};
 const order:Order={id:'QA-ORDER',version:1,orderNumber:'QA-ORDER',lineItems:[],customLineItems:[],totalPrice:{centAmount:100,currencyCode:'USD'},paymentState:'Pending'};
 
 test('Product Operations workbench and native product panel render real classic production JSX',()=>{
  const components=load('product-operations.tsx');
  assert.match(render(components.default,{project:'qa-project'}),/Product Operations/);
- assert.match(render(components.ProductOperationsDetail,{product}),/Store &amp; Fulfilment Information/);
+ const detail=render(components.ProductOperationsDetail,{product});
+ assert.match(detail,/Fulfilment Information/);assert.match(detail,/Primary Fulfilment Warehouse<\/[^>]+>.*Asia Warehouse/s);assert.match(detail,/Primary warehouse only/);assert.match(detail,/Store Information/);
 });
 test('OMS order information renders real classic production JSX without implying paid funds',()=>{
  const components=load('oms-presentation.tsx');
@@ -115,7 +116,7 @@ test('production Product Operations loads 544 products in two bounded pages, ope
   assert.equal(reads.filter(path=>path.startsWith('products?')).length,2,'544 products should require two complete bounded pages, not six network round trips.');
   const click=async(label:string)=>{const button=Array.from(dom.window.document.querySelectorAll('button')).find((item:any)=>item.textContent?.includes(label)) as HTMLButtonElement|undefined;assert.ok(button,`Missing button: ${label}`);await React.act(async()=>{button.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));});};
   await click('View operations');
-  assert.match(text(),/Store & Fulfilment Information/);assert.match(text(),/Asia Warehouse/);assert.match(text(),/Total Available Inventory: 8/);assert.match(text(),/QA-SKU/);assert.match(text(),/Reserved Inventory/);assert.match(text(),/up to 10 seconds/);
+  assert.match(text(),/Fulfilment Information/);assert.match(text(),/Primary Fulfilment WarehouseAsia Warehouse/);assert.match(text(),/Fulfilment Warehouse/);assert.match(text(),/Total Available Inventory: 8/);assert.match(text(),/QA-SKU/);assert.match(text(),/Reserved Inventory/);assert.match(text(),/up to 10 seconds/);
   await click('Refresh operational information');assert.match(text(),/Total Available Inventory: 8/);
   await click('Back to product operations');assert.match(text(),/544 matching products/);
   await click('Refresh products and stock');assert.match(text(),/QA product/);
