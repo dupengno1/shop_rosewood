@@ -14,6 +14,7 @@ import {Notice,Section,NativeLink} from './shared';
 import {createDeliveryAttempt} from './delivery-attempt';
 import OrderOperations from './oms-workflows';
 import {OrderInformation} from './oms-presentation';
+import {lineFulfilmentWarehouse} from './fulfilment-warehouse';
 
 export default function OrderPanel({id,nativeUrl,canManage}:{id:string;nativeUrl:string;canManage:boolean}) {
   const api=useCommerceApi();
@@ -62,6 +63,8 @@ export default function OrderPanel({id,nativeUrl,canManage}:{id:string;nativeUrl
   const physicalLines=lines.filter(line=>line.classification.type==='physical');
   const cannotDispatch=Boolean(workflowsBusy||lineError||needsReload||order.orderState==='Cancelled'||order.shippingMode==='Multiple'||!order.shippingInfo||lines.some(line=>line.overDelivered)||!physicalLines.some(line=>line.remainingQuantity>0));
   const deliveries=orderDeliveries(order);
+  const nativeLines=new Map<string,Order['lineItems'][number]>((order.lineItems||[]).map(line=>[line.id,line]));
+  const warehouseOf=(line:FulfillmentLine)=>lineFulfilmentWarehouse(nativeLines.get(line.id)||{},line.classification.type==='digital');
   return <Spacings.Stack scale="l">
     <Notice error={error||lineError} message={message}/>
     <Text.Subheadline as="h4">Order {order.orderNumber || order.id}</Text.Subheadline>
@@ -75,7 +78,8 @@ export default function OrderPanel({id,nativeUrl,canManage}:{id:string;nativeUrl
       {!order.shippingInfo&&order.shippingMode!=='Multiple'&&<ContentNotification type="warning">The order has no shipping information. Configure it in the native order first.</ContentNotification>}
       {order.orderState==='Cancelled'&&<ContentNotification type="warning">The order is cancelled; new deliveries are not allowed.</ContentNotification>}
       {lines.some(line=>line.overDelivered)&&<ContentNotification type="error">Recorded deliveries exceed the ordered quantity. Review the native order first.</ContentNotification>}
-      {physicalLines.length?<DataTable<FulfillmentLine> isCondensed rows={physicalLines} columns={[{key:'name',label:'Product / SKU'},{key:'quantity',label:'Ordered'},{key:'deliveredQuantity',label:'Recorded'},{key:'remainingQuantity',label:'Remaining'},{key:'new',label:'Dispatch Quantity'}]} itemRenderer={(line,column)=>{
+      {physicalLines.length?<DataTable<FulfillmentLine> isCondensed rows={physicalLines} columns={[{key:'name',label:'Product / SKU'},{key:'warehouse',label:'Fulfilment Warehouse'},{key:'quantity',label:'Ordered'},{key:'deliveredQuantity',label:'Recorded'},{key:'remainingQuantity',label:'Remaining'},{key:'new',label:'Dispatch Quantity'}]} itemRenderer={(line,column)=>{
+        if(column.key==='warehouse')return warehouseOf(line);
         if(column.key==='name')return <span>{line.name}<br/><small>{line.sku || (line.kind==='customLineItem'?'Custom Physical Item':'No SKU')}</small><br/><small>{line.classification.reason}</small></span>;
         if(column.key==='new')return <TextInput name={line.id} value={quantities[line.id] || ''} isDisabled={!canManage||busy||cannotDispatch||line.remainingQuantity===0} onChange={event=>{setQuantities(previous=>({...previous,[line.id]:event.target.value}));setPreview(undefined);}}/>;
         return line[column.key as 'quantity'|'deliveredQuantity'|'remainingQuantity'];
@@ -91,7 +95,8 @@ export default function OrderPanel({id,nativeUrl,canManage}:{id:string;nativeUrl
       if(!rows.length)return null;
       return <Section key={group.type} title={`${group.title}（${rows.length}）`}>
         <ContentNotification type={group.type==='unknown'?'warning':'info'}>{group.description}</ContentNotification>
-        <DataTable<FulfillmentLine> isCondensed rows={rows} columns={[{key:'name',label:'Order Item'},{key:'quantity',label:'Ordered Quantity'},{key:'reason',label:'Classification Source'}]} itemRenderer={(line,column)=>{
+        <DataTable<FulfillmentLine> isCondensed rows={rows} columns={[{key:'name',label:'Order Item'},...(group.type==='digital'?[{key:'warehouse',label:'Fulfilment Warehouse'}]:[]),{key:'quantity',label:'Ordered Quantity'},{key:'reason',label:'Classification Source'}]} itemRenderer={(line,column)=>{
+          if(column.key==='warehouse')return warehouseOf(line);
           if(column.key==='name')return <span>{line.name}{line.sku&&<><br/><small>{line.sku}</small></>}{line.deliveredQuantity>0&&<><br/><small>Existing {line.deliveredQuantity} previously recorded deliveries. Review their classification and processing history.</small></>}</span>;
           if(column.key==='reason')return line.classification.reason;
           return line.quantity;
