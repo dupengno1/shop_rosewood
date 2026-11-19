@@ -17,7 +17,9 @@ export function useCommerceApi() {
 }
 
 export type Localized = Record<string, string>;
-export type Variant = {id:number;sku?:string;images?:{url:string}[];prices?:{value?:{centAmount?:number;currencyCode?:string}}[];attributes?:{name:string;value:unknown}[]};
+export type PriceReference={id:string;typeId?:string;obj?:{key?:string;name?:Localized|string}};
+export type EmbeddedPrice={id?:string;key?:string;value?:{type?:string;centAmount?:number;currencyCode?:string;fractionDigits?:number};country?:string;channel?:PriceReference;customerGroup?:PriceReference;validFrom?:string;validUntil?:string;[key:string]:unknown};
+export type Variant = {id:number;sku?:string;images?:{url:string}[];prices?:EmbeddedPrice[];attributes?:{name:string;value:unknown}[]};
 export type ProductData = {name?:Localized;description?:Localized;masterVariant:Variant;variants:Variant[];[key:string]:unknown};
 export type Product = {id:string;key?:string;version:number;priceMode?:string;masterData:{current:ProductData;staged:ProductData;hasStagedChanges:boolean;published:boolean}};
 export type Parcel = {id:string;trackingData?:{trackingId?:string;carrier?:string};items?:{id:string;quantity:number}[]};

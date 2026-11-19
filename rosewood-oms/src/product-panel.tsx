@@ -12,6 +12,7 @@ import {Notice,Section,NativeLink} from './shared';
 import InventoryPanel from './inventory-panel';
 import {ProductOperationsDetail} from './product-operations';
 import {configuredPrimaryWarehouse} from './fulfilment-warehouse';
+import PricePanel from './price-panel';
 
 export default function ProductPanel({id,variantId,nativeUrl,canManage,mode='all'}:{id:string;variantId?:number;nativeUrl:string;canManage:boolean;mode?:'all'|'pim'}) {
   const api=useCommerceApi();
@@ -48,6 +49,7 @@ export default function ProductPanel({id,variantId,nativeUrl,canManage,mode='all
     <Text.Detail>Version {product.version} · {product.masterData.published?'Published':'Unpublished'} · {product.masterData.hasStagedChanges?'Staged Changes':'No Staged Changes'}</Text.Detail>
     <Spacings.Inline><SecondaryButton label="Refresh Data" isDisabled={busy||loading} onClick={()=>void reload()}/><NativeLink url={nativeProductUrl.href} label="Open Native Product"/></Spacings.Inline>
     <ProductOperationsDetail product={product}/>
+    <PricePanel product={product} canManage={canManage} disabled={busy||loading||needsReload} onBusyChange={setBusy} onChanged={result=>{setProduct(result);setPreview(false);setConfirmed(false);}} nativeUrl={product.priceMode==='Standalone'?new URL(`/${nativeProductUrl.pathname.split('/')[1]}/standalone-prices`,nativeProductUrl.origin).href:nativeProductUrl.href}/>
     <Section title="Product Quality & Publishing">
       <Text.Body>Review staged names, descriptions, images, SKUs and prices for this product before publishing.</Text.Body>
       {quality.issues.length ? quality.issues.map((issue,i)=><ContentNotification key={issue.code+i} type={issue.severity}>{issue.message}</ContentNotification>) : <ContentNotification type="success">All current checks passed.</ContentNotification>}
