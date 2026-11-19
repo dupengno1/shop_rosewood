@@ -4,6 +4,12 @@ import {localized} from './domain';
 import {configuredPrimaryWarehouse,fulfilmentWarehouseLabel,lineFulfilmentWarehouse,nativePrimaryWarehouse,productInfo,warehouseName} from './fulfilment-warehouse';
 export {DIGITAL_DELIVERY,PRIMARY_WAREHOUSE_ATTRIBUTE,warehouseName,warehouseNames,lineFulfilmentWarehouse} from './fulfilment-warehouse';
 export type InventorySummary={available:number|null;reserved:number|null;onStock:number|null;status:'In Stock'|'Low Stock'|'Out of Stock'|'Unknown'};
+export function supplyChannelGroups(inventory:Inventory[]){
+ const groups=new Map<string,{id:string;label:string;rows:Inventory[]}>();
+ for(const row of inventory){const id=row.supplyChannel?.id||'unscoped';const group=groups.get(id)||{id,label:row.supplyChannel?warehouseName(row.supplyChannel):'Unscoped Project inventory',rows:[]};group.rows.push(row);groups.set(id,group);}
+ const values=[...groups.values()];
+ return values.map(group=>({...group,label:values.filter(other=>other.label===group.label).length>1?`${group.label} (${group.rows[0].supplyChannel?.obj?.key||group.id})`:group.label}));
+}
 export function inventorySummary(rows:Inventory[],complete=true):InventorySummary{
   if(!complete||!rows.length||rows.some(row=>!Number.isSafeInteger(row.quantityOnStock)||!Number.isSafeInteger(row.availableQuantity)))return {available:null,reserved:null,onStock:null,status:'Unknown'};
   const available=rows.reduce((sum,row)=>sum+row.availableQuantity,0),onStock=rows.reduce((sum,row)=>sum+row.quantityOnStock,0);
