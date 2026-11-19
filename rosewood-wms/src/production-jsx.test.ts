@@ -101,9 +101,10 @@ test('production Product Operations loads 544 products in two bounded pages, ope
    return {results:catalog.filter(row=>row.id>cursor).slice(0,limit)};
   }
   if(path.startsWith('inventory?'))return {results:[inventory]};
-  if(path.startsWith('product-selections/key=rosewood-us-catalog/products'))return {results:[{product:{id:product.id}}]};
-  if(path.startsWith('product-selections/key=rosewood-hk-catalog/products'))return {results:[]};
-  if(path.startsWith(`products/${product.id}/product-selections`))return {results:[{productSelection:{id:'QA-CATALOG',obj:{key:'rosewood-us-catalog'}}}]};
+  if(path.startsWith('product-selections?'))return {results:[{id:'QA-CATALOG',key:'rosewood-global-shared',name:{en:'Global Catalog'},mode:'Individual'},{id:'QA-HOTEL',key:'new-hotel-selection',mode:'Individual'}]};
+  if(path.startsWith('product-selections/QA-CATALOG/products'))return {results:[{product:{id:product.id}}]};
+  if(path.startsWith('product-selections/QA-HOTEL/products'))return {results:[]};
+  if(path.startsWith(`products/${product.id}/product-selections`))return {results:[{productSelection:{id:'QA-CATALOG',obj:{id:'QA-CATALOG',key:'rosewood-global-shared',name:{en:'Global Catalog'},mode:'Individual'}}}]};
   throw new Error(`Unexpected product-operation request: ${path}`);
  };
  const {createRoot}=requireFromSource('react-dom/client');
@@ -187,5 +188,39 @@ test('production OMS renders verified Cart reservations and clears old balances 
   cart.lineItems[0].reservation.obj.state='Committed';await refresh();assert.match(text(),/Native Quantity: 2 · Active Reserved: 0 · Committed: 2/);assert.match(text(),/not an active hold/);
   denyCart=true;await refresh();assert.match(text(),/could not be read/);assert.match(text(),/Native Quantity: Unknown · Active Reserved: Unknown/);assert.doesNotMatch(text(),/Active Reserved: 2/);
   assert.equal(paths.filter(path=>path.startsWith('carts/')).length,4,'One bounded source-Cart GET per refresh.');assert.ok(paths.filter(path=>path.startsWith('carts/')).every(path=>path.endsWith('?expand=lineItems[*].reservation.inventoryEntry.supplyChannel')));
+ }finally{await React.act(async()=>{root.unmount();});dom.window.close();for(const [name,descriptor]of previous)if(descriptor)Object.defineProperty(globals,name,descriptor);else delete globals[name];}
+});
+
+test('production pricing enforces permissions, review, version checks and ambiguous-write recovery before staged saves',async()=>{
+ const configRequire=createRequire(requireFromSource.resolve('@commercetools-frontend/application-config')),{JSDOM}=configRequire('jsdom');
+ const dom=new JSDOM('<div id="root"></div>',{url:'https://qa.example.invalid'}),globals=globalThis as any,previous=new Map<string,PropertyDescriptor|undefined>();
+ for(const [name,value] of Object.entries({window:dom.window,document:dom.window.document,navigator:dom.window.navigator,HTMLElement:dom.window.HTMLElement,Element:dom.window.Element,getComputedStyle:dom.window.getComputedStyle,IS_REACT_ACT_ENVIRONMENT:true})){
+  previous.set(name,Object.getOwnPropertyDescriptor(globals,name));Object.defineProperty(globals,name,{value,writable:true,configurable:true});
+ }
+ const price={id:'QA-PRICE',value:{type:'centPrecision',currencyCode:'HKD',fractionDigits:2,centAmount:1234},country:'HK',channel:{id:'QA-CHANNEL'}};
+ const data={...productData,masterVariant:{...productData.masterVariant,prices:[price]}};
+ let live:Product={...product,version:1,priceMode:'Embedded',masterData:{current:structuredClone(data),staged:structuredClone(data),published:true,hasStagedChanges:false}},posts=0,loseResponse=false;
+ const api=async(path:string,payload?:any)=>{
+  assert.equal(path,`products/${product.id}`);
+  if(payload){
+   posts++;assert.equal(payload.version,live.version);assert.equal(payload.actions.length,1);const action=payload.actions[0];assert.equal(action.action,'changePrice');assert.equal(action.staged,true);assert.equal(action.priceId,price.id);assert.deepEqual(action.price.channel,{typeId:'channel',id:'QA-CHANNEL'});assert.equal(action.price.country,'HK');
+   live={...live,version:live.version+1,masterData:{...live.masterData,hasStagedChanges:true,staged:{...live.masterData.staged,masterVariant:{...live.masterData.staged.masterVariant,prices:[{...price,...action.price,value:{...action.price.value,fractionDigits:2}}]}}}};
+   if(loseResponse){loseResponse=false;throw Error('response lost');}
+  }
+  return structuredClone(live);
+ };
+ const Component=load('price-panel.tsx',undefined,api).default,{createRoot}=requireFromSource('react-dom/client'),root=createRoot(dom.window.document.getElementById('root'));
+ function Harness({canManage}:{canManage:boolean}){const [model,setModel]=React.useState(live),[busy,setBusy]=React.useState(false);return React.createElement(Component,{product:model,canManage,disabled:busy,nativeUrl:'https://qa.example.invalid/product',onChanged:setModel,onBusyChange:setBusy});}
+ const text=()=>dom.window.document.body.textContent||'';
+ const button=(label:string)=>Array.from(dom.window.document.querySelectorAll('button')).find((e:any)=>e.textContent?.includes(label)) as HTMLButtonElement;
+ const click=async(label:string)=>{const e=button(label);assert.ok(e,`Missing ${label}`);assert.equal(e.disabled,false);await React.act(async()=>{e.dispatchEvent(new dom.window.MouseEvent('click',{bubbles:true}));});};
+ const fill=async(value:string)=>{const e=dom.window.document.querySelector('input[name="price-amount"]') as HTMLInputElement;assert.ok(e);await React.act(async()=>{Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype,'value')!.set!.call(e,value);e.dispatchEvent(new dom.window.Event('input',{bubbles:true}));});};
+ const renderApp=async(canManage:boolean,key:string)=>{await React.act(async()=>{root.render(React.createElement(IntlProvider,{locale:'en',messages:{}},React.createElement(Harness,{key,canManage})));});};
+ try{
+  await renderApp(false,'read-only');assert.equal(button('Edit amount').disabled,true);assert.equal(posts,0);
+  await renderApp(true,'manager');await click('Edit amount');await fill('19.99');await click('Review price change');assert.match(text(),/12.34 → 19.99 HKD/);live={...live,version:2};await click('Confirm staged price');assert.equal(posts,0);assert.match(text(),/changed after your review/);
+  await click('Refresh prices / Verify result');await click('Edit amount');await fill('19.99');await click('Review price change');await click('Confirm staged price');assert.equal(posts,1);assert.match(text(),/Price saved to staged product data/);assert.equal(live.masterData.current.masterVariant.prices![0].value!.centAmount,1234);
+  await click('Edit amount');await fill('20.99');await click('Review price change');loseResponse=true;await click('Confirm staged price');assert.equal(posts,2);assert.match(text(),/no automatic retry/);assert.equal(button('Review price change').disabled,true);
+  await click('Refresh prices / Verify result');assert.equal(posts,2);assert.match(text(),/20.99/);assert.equal(live.masterData.current.masterVariant.prices![0].value!.centAmount,1234);
  }finally{await React.act(async()=>{root.unmount();});dom.window.close();for(const [name,descriptor]of previous)if(descriptor)Object.defineProperty(globals,name,descriptor);else delete globals[name];}
 });
