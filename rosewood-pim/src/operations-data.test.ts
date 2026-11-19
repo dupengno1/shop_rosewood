@@ -75,3 +75,13 @@ test('fulfilment warehouse labels the configured primary, native mirror, digital
  assert.deepEqual(orderConsignments(order).map(group=>[group.warehouse,group.lines.map(line=>line.fulfilmentWarehouse)]),[['Americas Warehouse',['Americas Warehouse']],[DIGITAL_DELIVERY,[DIGITAL_DELIVERY]]]);
 });
 
+
+test('new hotel supply channels are discovered and same display names never merge stock across channel IDs',async()=>{
+ const {supplyChannelGroups}=await import('./operations-data');
+ const first={...entry(10,8),supplyChannel:{id:'hotel-one',obj:{key:'rw-hotel-one',name:{en:'Hotel stock'}}}};
+ const second={...entry(20,15),id:'entry-two',supplyChannel:{id:'hotel-two',obj:{key:'rw-hotel-two',name:{en:'Hotel stock'}}}};
+ const unscoped={...entry(3,2),id:'entry-unscoped',supplyChannel:undefined};
+ const groups=supplyChannelGroups([first,second,unscoped]);
+ assert.equal(groups.length,3);assert.deepEqual(groups.map(group=>group.rows[0].availableQuantity),[8,15,2]);
+ assert.equal(groups[0].label,'Hotel stock (rw-hotel-one)');assert.equal(groups[1].label,'Hotel stock (rw-hotel-two)');assert.equal(groups[2].label,'Unscoped Project inventory');
+});
